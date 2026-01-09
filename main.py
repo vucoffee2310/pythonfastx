@@ -1,111 +1,71 @@
+from fastapi import FastAPI, Query
+from fastapi.responses import HTMLResponse
 import os
 import json
-from fastapi import FastAPI
-from fastapi.responses import HTMLResponse
 
 app = FastAPI()
 
-def get_directory_structure(rootdir):
-    """
-    Recursively builds a dictionary of the directory structure.
-    """
-    dir_structure = {}
-    rootdir = rootdir.rstrip(os.sep)
-    start = rootdir.rfind(os.sep) + 1
-    
-    dir_structure['name'] = os.path.basename(rootdir)
-    dir_structure['type'] = 'folder'
-    dir_structure['children'] = []
-
+def get_directory_tree(path):
     try:
-        if os.path.isdir(rootdir):
-            for item in os.listdir(rootdir):
-                path = os.path.join(rootdir, item)
-                if os.path.isdir(path):
-                    # Recursively call for subdirectories
-                    dir_structure['children'].append(get_directory_structure(path))
-                else:
-                    dir_structure['children'].append({
-                        "name": item,
-                        "type": "file"
-                    })
-    except PermissionError:
-        pass # Skip folders we can't access
-
-    return dir_structure
+        # Get only the immediate children to keep the JSON small
+        # We handle expansion via clicking (re-fetching or simple visibility)
+        entries = os.listdir(path)
+        tree = []
+        for entry in sorted(entries):
+            full_path = os.path.join(path, entry)
+            is_dir = os.path.isdir(full_path)
+            tree.append({
+                "name": entry,
+                "path": full_path,
+                "type": "folder" if is_dir else "file"
+            })
+        return tree
+    except Exception as e:
+        return [{"name": f"Error: {str(e)}", "type": "error"}]
 
 @app.get("/", response_class=HTMLResponse)
-def read_root():
-    # 1. Get the current directory structure as a dictionary
-    root_path = os.getcwd()
-    structure = get_directory_structure(root_path)
+def read_root(target: str = Query(None)):
+    # If no target is provided, show the actual Linux root "/"
+    # Change target to os.getcwd() if you only want to see your app files
+    root_to_show = target if target else "/"
     
-    # 2. Convert to JSON string for the JavaScript to use
-    json_structure = json.dumps(structure)
-
-    # 3. Return HTML with embedded CSS and JS
+    # Get current contents of the target folder
+    contents = get_directory_tree(root_to_show)
+    
     html_content = f"""
     <!DOCTYPE html>
     <html>
     <head>
-        <title>Vercel Folder Tree</title>
+        <title>Vercel System Explorer</title>
         <style>
-            body {{ font-family: monospace; background: #111; color: #eee; padding: 20px; }}
-            ul {{ list-style-type: none; padding-left: 20px; }}
-            li {{ margin: 5px 0; }}
-            .folder {{ cursor: pointer; font-weight: bold; color: #f1d592; }}
-            .folder::before {{ content: "📁 "; }}
-            .file {{ color: #a6e22e; }}
-            .file::before {{ content: "wc "; }}
-            .nested {{ display: none; }}
-            .active {{ display: block; }}
-            .caret::before {{ content: "▶"; display: inline-block; margin-right: 6px; color: #888; transform: rotate(0deg); transition: transform 0.2s; }}
-            .caret-down::before {{ transform: rotate(90deg); }}
+            body {{ font-family: sans-serif; padding: 20px; background: #fafafa; }}
+            .container {{ max-width: 800px; margin: auto; background: white; padding: 20px; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }}
+            .item {{ padding: 8px; border-bottom: 1px solid #eee; display: flex; align-items: center; }}
+            .item:hover {{ background: #f0f7ff; }}
+            .folder {{ font-weight: bold; color: #0070f3; cursor: pointer; text-decoration: none; }}
+            .file {{ color: #666; }}
+            .breadcrumb {{ margin-bottom: 20px; font-size: 1.1em; }}
+            .breadcrumb a {{ color: #0070f3; text-decoration: none; }}
         </style>
     </head>
     <body>
-        <h2>📂 Server Root: {root_path}</h2>
-        <div id="tree-root"></div>
-
-        <script>
-            const data = {json_structure};
-
-            function createTree(container, node) {{
-                const li = document.createElement('li');
-                
-                if (node.type === 'folder') {{
-                    const span = document.createElement('span');
-                    span.classList.add('folder', 'caret');
-                    span.textContent = node.name;
-                    li.appendChild(span);
-
-                    const ul = document.createElement('ul');
-                    ul.classList.add('nested');
-                    
-                    // Toggle click event
-                    span.addEventListener('click', function() {{
-                        this.parentElement.querySelector('.nested').classList.toggle('active');
-                        this.classList.toggle('caret-down');
-                    }});
-
-                    if (node.children) {{
-                        node.children.forEach(child => createTree(ul, child));
-                    }}
-                    li.appendChild(ul);
-                }} else {{
-                    const span = document.createElement('span');
-                    span.classList.add('file');
-                    span.textContent = node.name;
-                    li.appendChild(span);
-                }}
-
-                container.appendChild(li);
-            }}
-
-            const rootUl = document.createElement('ul');
-            createTree(rootUl, data);
-            document.getElementById('tree-root').appendChild(rootUl);
-        </script>
+        <div class="container">
+            <h1>System Explorer</h1>
+            <div class="breadcrumb">
+                <strong>Path:</strong> {root_to_show} 
+                {f' | <a href="/?target={os.path.dirname(root_to_show.rstrip("/")) or "/"}">⬆️ Up one level</a>' if root_to_show != "/" else ""}
+            </div>
+            
+            <div id="file-list">
+                {"".join([
+                    f'<div class="item">'
+                    f'{"📁" if i["type"]=="folder" else "📄"} '
+                    f'{"<a class=\'folder\' href=\'/?target=" + i["path"] + "\'>" + i["name"] + "</a>" if i["type"]=="folder" else "<span class=\'file\'>" + i["name"] + "</span>"}'
+                    f'</div>' 
+                    for i in contents
+                ])}
+            </div>
+        </div>
     </body>
     </html>
     """

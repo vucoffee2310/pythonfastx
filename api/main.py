@@ -7,10 +7,10 @@ from datetime import datetime
 
 app = FastAPI()
 
-# Check if PyAV is installed
+# Check PyAV status
 try:
     import av
-    pyav_status = f"✅ PyAV Installed ({av.__version__}) - Path: {os.path.dirname(av.__file__)}"
+    pyav_status = f"✅ PyAV Installed ({av.__version__})"
 except ImportError:
     pyav_status = "❌ PyAV Not Found"
 
@@ -50,58 +50,61 @@ def download_file(path: str):
 
 @app.get("/", response_class=HTMLResponse)
 def index():
-    # I am using the Explorer UI we built previously
     return f"""
 <!DOCTYPE html>
 <html>
 <head>
     <meta charset="UTF-8">
-    <title>Vercel Explorer + PyAV</title>
+    <title>Vercel Explorer</title>
     <style>
+        :root {{ --accent: #0078d4; }}
         body {{ margin: 0; font-family: 'Segoe UI', sans-serif; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }}
-        header {{ background: #f3f3f3; padding: 10px; border-bottom: 1px solid #ccc; display: flex; align-items: center; gap: 10px; }}
-        #status-bar {{ background: #333; color: white; padding: 5px 15px; font-size: 12px; font-family: monospace; }}
+        #status-bar {{ background: #222; color: #0f0; padding: 5px 15px; font-size: 12px; font-family: monospace; }}
+        header {{ background: #f3f3f3; padding: 8px; border-bottom: 1px solid #ccc; display: flex; gap: 10px; }}
         main {{ display: flex; flex-grow: 1; overflow: hidden; }}
         aside {{ width: 220px; background: #fafafa; border-right: 1px solid #ddd; padding: 10px; }}
         #content {{ flex-grow: 1; overflow-y: auto; }}
         table {{ width: 100%; border-collapse: collapse; font-size: 13px; }}
         th {{ text-align: left; padding: 10px; background: #eee; position: sticky; top: 0; }}
-        td {{ padding: 8px 10px; border-bottom: 1px solid #eee; }}
+        td {{ padding: 8px 10px; border-bottom: 1px solid #eee; white-space: nowrap; }}
+        
         tr.can-open {{ cursor: pointer; }}
         tr.can-open:hover {{ background: #e8f2ff; }}
-        .btn {{ padding: 3px 8px; font-size: 11px; cursor: pointer; }}
-        #preview {{ display:none; position:fixed; top:5%; left:5%; width:90%; height:90%; background:#1e1e1e; color:#ddd; z-index:100; flex-direction:column; }}
+        tr.cannot-open {{ cursor: default; }}
+        
+        .btn-dl {{ cursor: pointer; background: var(--accent); color: white; border: none; padding: 3px 8px; border-radius: 3px; font-size: 11px; }}
+        #preview-modal {{ display:none; position:fixed; top:5%; left:5%; width:90%; height:90%; background:#1e1e1e; color:#ddd; z-index:100; flex-direction:column; border-radius: 8px; box-shadow: 0 0 30px rgba(0,0,0,0.5); }}
     </style>
 </head>
 <body>
-    <div id="status-bar">SYSTEM STATUS: {pyav_status}</div>
+    <div id="status-bar">Vercel Runtime Status: {pyav_status}</div>
     <header>
         <button onclick="goUp()">⬆ Up</button>
         <input type="text" id="address" style="flex-grow:1" readonly>
     </header>
     <main>
         <aside>
-            <div style="cursor:pointer; padding:5px" onclick="navigateTo('/var/task')">📁 /var/task (App)</div>
-            <div style="cursor:pointer; padding:5px" onclick="navigateTo('/')">💻 / (Root)</div>
-            <div style="cursor:pointer; padding:5px" onclick="navigateTo('/tmp')">♻️ /tmp</div>
+            <div style="cursor:pointer; padding:5px" onclick="navigateTo('/var/task')">📁 App Root (/var/task)</div>
+            <div style="cursor:pointer; padding:5px" onclick="navigateTo('/')">💻 System Root (/)</div>
+            <div style="cursor:pointer; padding:5px" onclick="navigateTo('/tmp')">♻️ Temp Folder</div>
         </aside>
         <div id="content">
             <table>
-                <thead><tr><th>Name</th><th>Size</th><th>Type</th><th>Actions</th></tr></thead>
+                <thead><tr><th width="40%">Name</th><th width="20%">Size</th><th width="20%">Type</th><th width="20%">Action</th></tr></thead>
                 <tbody id="list"></tbody>
             </table>
         </div>
     </main>
-    <div id="preview">
+    <div id="preview-modal">
         <div style="padding:10px; background:#333; display:flex; justify-content:space-between">
             <span id="p-title"></span>
-            <button onclick="document.getElementById('preview').style.display='none'">Close</button>
+            <button onclick="document.getElementById('preview-modal').style.display='none'">Close</button>
         </div>
-        <pre id="p-body" style="padding:20px; overflow:auto; flex-grow:1; margin:0"></pre>
+        <pre id="p-body" style="padding:20px; overflow:auto; flex-grow:1; margin:0; font-family: monospace;"></pre>
     </div>
     <script>
         let currentPath = '/var/task';
-        const TEXT_EXTS = ['.py', '.sh', '.json', '.txt', '.md', '.yml', '.env'];
+        const TEXT_EXTS = ['.py', '.sh', '.json', '.txt', '.md', '.yml', '.yaml', '.env'];
 
         async function navigateTo(path) {{
             currentPath = path;
@@ -110,28 +113,37 @@ def index():
             const data = await res.json();
             const list = document.getElementById('list');
             list.innerHTML = '';
+            
             data.items.forEach(item => {{
                 const isText = TEXT_EXTS.includes(item.ext);
+                const canOpen = item.is_dir || isText;
                 const tr = document.createElement('tr');
-                if (item.is_dir || isText) tr.className = 'can-open';
-                tr.ondblclick = () => item.is_dir ? navigateTo(item.path) : viewFile(item.path);
+                tr.className = canOpen ? 'can-open' : 'cannot-open';
+
+                tr.ondblclick = () => {{
+                    if (item.is_dir) navigateTo(item.path);
+                    else if (isText) viewFile(item.path);
+                }};
+
                 tr.innerHTML = `
                     <td>${{item.is_dir ? '📁':'📄'}} ${{item.name}}</td>
                     <td>${{item.size}}</td>
-                    <td>${{item.ext || (item.is_dir ? 'Folder' : 'File')}}</td>
-                    <td><button class="btn" onclick="location.href='/api/download?path='+encodeURIComponent('${{item.path}}')">Download</button></td>
+                    <td>${{item.is_dir ? 'Folder' : (item.ext.toUpperCase() || 'File')}}</td>
+                    <td>${{!item.is_dir ? `<button class="btn-dl" onclick="location.href='/api/download?path='+encodeURIComponent('${{item.path}}')">Download</button>` : ''}}</td>
                 `;
                 list.appendChild(tr);
             }});
         }}
+
         async function viewFile(path) {{
             const res = await fetch(`/api/view?path=${{encodeURIComponent(path)}}`);
             const data = await res.json();
-            if (data.error) return alert("Binary file");
+            if (data.error) return alert("Binary or inaccessible file.");
             document.getElementById('p-title').innerText = path;
             document.getElementById('p-body').textContent = data.content;
-            document.getElementById('preview').style.display = 'flex';
+            document.getElementById('preview-modal').style.display = 'flex';
         }}
+
         function goUp() {{
             let p = currentPath.split('/').filter(x=>x); p.pop();
             navigateTo('/' + p.join('/'));

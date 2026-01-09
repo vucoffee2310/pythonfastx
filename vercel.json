@@ -1,12 +1,12 @@
 {
-  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "version": 2,
   "installCommand": "bash avp.sh",
-  "framework": "fastapi",
-  "functions": {
-    "main.py": {
-      "maxDuration": 300,
-      "runtime": "@vercel/python@6.1.5"
-    },
+  "builds": [
+    {
+      "src": "main.py",
+      "use": "@vercel/python"
+    }
+  ],
   "routes": [
     {
       "src": "/(.*)",

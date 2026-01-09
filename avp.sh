@@ -1,4 +1,8 @@
 #!/bin/bash
+# --- NEW: INSTALL STANDARD REQUIREMENTS FIRST ---
+echo "📦 Installing standard requirements (FastAPI, etc)..."
+pip install -r requirements.txt
+
 
 # Configuration
 URL="https://github.com/vucoffee2310/youtubedownloader/releases/download/pyav-custom/pyav-custom.tar.gz"

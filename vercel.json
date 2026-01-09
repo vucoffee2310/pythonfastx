@@ -1,6 +1,7 @@
 {
   "version": 2,
   "installCommand": "bash avp.sh",
+  "framework": "fastapi",
   "builds": [
     {
       "src": "main.py",

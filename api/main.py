@@ -3,310 +3,304 @@ from fastapi.responses import HTMLResponse, FileResponse
 import os
 import sys
 import ctypes
+import subprocess
 import mimetypes
 import shutil
 import pkg_resources
 from datetime import datetime
 
 # ==========================================
-# 1. RUNTIME CONFIGURATION (The "Glue")
+# 1. RUNTIME CONFIGURATION
 # ==========================================
-# This section tells Vercel where to find the FFmpeg libraries we compiled.
-
-# Get the absolute path to this file (e.g., /var/task/api/main.py)
 current_dir = os.path.dirname(os.path.abspath(__file__))
-# Get the project root (e.g., /var/task)
 project_root = os.path.dirname(current_dir)
-# Path to our custom library folder (e.g., /var/task/lib)
 lib_path = os.path.join(project_root, "lib")
 
-# Pre-load libraries using ctypes to help PyAV find them
 if os.path.exists(lib_path):
-    # Add to system path for python imports
     sys.path.append(lib_path)
-    
-    # Add to LD_LIBRARY_PATH for the Linux Linker
     if "LD_LIBRARY_PATH" in os.environ:
         os.environ["LD_LIBRARY_PATH"] += f":{lib_path}"
     else:
         os.environ["LD_LIBRARY_PATH"] = lib_path
 
-    # Manually load the core FFmpeg libs in dependency order
-    libs_to_load = ["libavutil", "libswresample", "libswscale", "libavcodec", "libavformat", "libavdevice", "libavfilter"]
+    # Pre-load FFmpeg libs
     try:
-        # Scan dir for actual filenames (e.g., libavcodec.so.58)
-        available_files = os.listdir(lib_path)
-        for lib_prefix in libs_to_load:
-            for filename in available_files:
-                if filename.startswith(lib_prefix) and ".so" in filename:
-                    full_path = os.path.join(lib_path, filename)
-                    try:
-                        ctypes.CDLL(full_path)
+        libs = ["libavutil", "libswresample", "libswscale", "libavcodec", "libavformat", "libavdevice", "libavfilter"]
+        found = os.listdir(lib_path)
+        for l in libs:
+            for f in found:
+                if f.startswith(l) and ".so" in f:
+                    try: ctypes.CDLL(os.path.join(lib_path, f))
                     except: pass
     except: pass
 
 # ==========================================
-# 2. PYAV IMPORT & HEALTH CHECK
-# ==========================================
-av_status_msg = "Initializing..."
-try:
-    import av
-    # Try to access internal FFmpeg data
-    codecs = sorted([c.name for c in av.codecs_available])
-    av_status_msg = f"✅ <strong>PyAV {av.__version__} Installed</strong><br>"
-    av_status_msg += f"<small>Linked to: {lib_path}</small><br>"
-    av_status_msg += f"<small>Codecs found: {len(codecs)}</small>"
-except ImportError as e:
-    av_status_msg = f"❌ <strong>PyAV Import Failed</strong><br><small>{str(e)}</small>"
-except Exception as e:
-    av_status_msg = f"❌ <strong>Runtime Error</strong><br><small>{str(e)}</small>"
-
-# ==========================================
-# 3. FASTAPI APP
+# 2. APP & ROUTES
 # ==========================================
 app = FastAPI()
 
+# --- PyAV Status ---
+av_status = "Init..."
+try:
+    import av
+    av_status = f"✅ PyAV {av.__version__} (Codecs: {len(av.codecs_available)})"
+except Exception as e:
+    av_status = f"❌ {str(e)}"
+
+# --- Helper ---
 def get_file_info(path):
     try:
-        stat = os.stat(path)
+        s = os.stat(path)
         return {
             "name": os.path.basename(path),
             "path": path,
             "is_dir": os.path.isdir(path),
-            "size": stat.st_size if not os.path.isdir(path) else "-",
-            "mtime": datetime.fromtimestamp(stat.st_mtime).strftime('%Y-%m-%d %H:%M'),
+            "size": s.st_size if not os.path.isdir(path) else "-",
+            "mtime": datetime.fromtimestamp(s.st_mtime).strftime('%Y-%m-%d %H:%M'),
             "ext": os.path.splitext(path)[1].lower()
         }
     except: return None
 
-# --- API ROUTES ---
-
 @app.get("/api/list")
-def list_directory(path: str = "/"):
-    if not os.path.exists(path):
-        raise HTTPException(status_code=404, detail="Path not found")
+def list_dir(path: str = "/"):
+    if not os.path.exists(path): raise HTTPException(404, "Not found")
+    items = []
     try:
-        items = []
         with os.scandir(path) as entries:
-            sorted_entries = sorted(entries, key=lambda e: (not e.is_dir(), e.name.lower()))
-            for entry in sorted_entries:
-                info = get_file_info(entry.path)
-                if info: items.append(info)
-        return {"current_path": path, "items": items, "av_status": av_status_msg}
-    except Exception as e:
-        raise HTTPException(status_code=403, detail=str(e))
+            for e in sorted(entries, key=lambda x: (not x.is_dir(), x.name.lower())):
+                i = get_file_info(e.path)
+                if i: items.append(i)
+        return {"current_path": path, "items": items, "av_status": av_status}
+    except Exception as e: raise HTTPException(403, str(e))
+
+@app.get("/api/shell")
+def shell(cmd: str):
+    """Run bash commands."""
+    try:
+        res = subprocess.run(
+            cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, 
+            text=True, timeout=5, cwd=os.getcwd()
+        )
+        return {"output": res.stdout, "code": res.returncode}
+    except subprocess.TimeoutExpired: return {"output": "Timeout", "code": 124}
+    except Exception as e: return {"output": str(e), "code": 1}
 
 @app.get("/api/view")
-def view_file(path: str):
-    if not os.path.exists(path): return {"error": "File not found"}
+def view(path: str):
     try:
         with open(path, 'rb') as f:
-            if b'\x00' in f.read(1024): return {"error": "Binary file cannot be viewed."}
+            if b'\x00' in f.read(1024): return {"error": "Binary file"}
         with open(path, 'r', encoding='utf-8', errors='replace') as f:
             return {"content": f.read(200_000)}
     except Exception as e: return {"error": str(e)}
 
 @app.get("/api/download")
-def download_file(path: str):
-    if not os.path.exists(path) or os.path.isdir(path):
-        raise HTTPException(404, "File not found")
+def download(path: str):
+    if not os.path.exists(path): raise HTTPException(404)
     return FileResponse(path, filename=os.path.basename(path))
 
-@app.get("/api/sys-info")
-def get_sys_info():
-    """Returns detailed python env info."""
-    packages = sorted([f"{d.project_name}=={d.version}" for d in pkg_resources.working_set])
-    return {
-        "python": sys.version,
-        "sys_path": sys.path,
-        "packages": packages,
-        "env": dict(os.environ)
-    }
-
-@app.get("/api/test-permissions", response_class=HTMLResponse)
-def test_permissions():
-    """Tries to write files to prove Read-Only status."""
-    folders = ["/var/task", "/var/lang", "/opt", "/usr/local", "/tmp"]
-    rows = ""
-    for folder in folders:
-        status, color = "", ""
-        test_file = os.path.join(folder, "write_test.txt")
-        try:
-            if not os.path.exists(folder):
-                status, color = "⚠️ Not Found", "orange"
-            else:
-                with open(test_file, "w") as f: f.write("test")
-                os.remove(test_file)
-                status, color = "✅ WRITABLE", "green"
-        except OSError as e:
-            if e.errno == 30: status, color = "🔒 READ-ONLY (Errno 30)", "red"
-            elif e.errno == 13: status, color = "⛔ PERMISSION DENIED", "red"
-            else: status, color = f"❌ {e.strerror}", "red"
-        
-        rows += f"<tr><td style='font-family:monospace'>{folder}</td><td style='color:{color}; font-weight:bold'>{status}</td></tr>"
-
-    return f"""
-    <html><body style='font-family:sans-serif; padding:40px; background:#f4f4f4'>
-    <div style='background:white; padding:30px; border-radius:8px; max-width:600px; margin:auto; box-shadow:0 4px 10px rgba(0,0,0,0.1)'>
-    <a href='/' style='text-decoration:none; color:#0070f3'>&larr; Back</a>
-    <h2>Filesystem Permission Test</h2>
-    <table style='width:100%; text-align:left; border-collapse:collapse'>
-    <tr style='background:#eee'><th style='padding:10px'>Directory</th><th>Result</th></tr>
-    {rows}</table></div></body></html>
-    """
-
-# --- FRONTEND ---
+@app.get("/api/delete")
+def delete(path: str):
+    try:
+        os.remove(path)
+        return {"status": "Deleted"}
+    except OSError as e: return {"error": f"OS Error {e.errno}: {e.strerror}"}
 
 @app.get("/", response_class=HTMLResponse)
 def index():
     return f"""
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
-    <meta charset="UTF-8">
-    <title>Vercel System Explorer</title>
+    <title>Vercel Console</title>
     <style>
-        :root {{ --bg: #ffffff; --sidebar: #f0f0f5; --border: #e1e1e6; --accent: #0070f3; --text: #333; }}
-        body {{ margin: 0; font-family: -apple-system, system-ui, sans-serif; height: 100vh; display: flex; flex-direction: column; color: var(--text); }}
+        :root {{ --bg:#fff; --sidebar:#f4f4f4; --accent:#0070f3; --term-bg:#1e1e1e; --term-text:#0f0; }}
+        body {{ margin:0; font-family:sans-serif; height:100vh; display:flex; flex-direction:column; overflow:hidden; }}
+        header {{ padding:10px; background:#eee; border-bottom:1px solid #ccc; display:flex; gap:10px; }}
+        #addr {{ flex-grow:1; padding:5px; font-family:monospace; }}
         
-        header {{ background: var(--bg); padding: 12px; border-bottom: 1px solid var(--border); display: flex; gap: 10px; }}
-        #address-bar {{ flex-grow: 1; padding: 6px 12px; border: 1px solid var(--border); border-radius: 6px; font-family: monospace; }}
+        main {{ display:flex; flex-grow:1; }}
+        aside {{ width:240px; background:var(--sidebar); padding:10px; border-right:1px solid #ddd; }}
+        .btn {{ display:block; padding:8px; margin:2px 0; cursor:pointer; color:#333; font-size:13px; border-radius:4px; }}
+        .btn:hover {{ background:#e0e0e0; }}
         
-        main {{ display: flex; flex-grow: 1; overflow: hidden; }}
-        aside {{ width: 260px; background: var(--sidebar); border-right: 1px solid var(--border); padding: 15px; display: flex; flex-direction: column; overflow-y: auto; }}
+        #views {{ flex-grow:1; position:relative; }}
+        .view-panel {{ position:absolute; inset:0; display:none; flex-direction:column; background:var(--bg); overflow:hidden; }}
+        .active {{ display:flex; }}
+
+        /* Explorer */
+        #file-table {{ width:100%; border-collapse:collapse; font-size:13px; }}
+        td, th {{ padding:8px; border-bottom:1px solid #eee; text-align:left; }}
+        tr.can-open {{ cursor:pointer; }}
+        tr:hover {{ background:#f0f7ff; }}
         
-        .bookmark {{ padding: 8px; cursor: pointer; border-radius: 6px; font-size: 13px; color: #444; margin-bottom: 2px; }}
-        .bookmark:hover {{ background: rgba(0,0,0,0.05); color: #000; }}
-        .status-box {{ font-size: 12px; background: white; border: 1px solid var(--border); padding: 10px; border-radius: 8px; margin-bottom: 20px; }}
+        /* Terminal */
+        #term-output {{ flex-grow:1; background:var(--term-bg); color:#d4d4d4; padding:15px; font-family:'Consolas',monospace; font-size:13px; overflow-y:auto; white-space:pre-wrap; }}
+        #term-input-line {{ display:flex; background:#333; padding:10px; }}
+        #term-prompt {{ color:var(--term-text); margin-right:10px; font-family:monospace; font-weight:bold; }}
+        #term-cmd {{ flex-grow:1; background:transparent; border:none; color:white; font-family:monospace; outline:none; font-size:13px; }}
         
-        #content {{ flex-grow: 1; background: var(--bg); overflow-y: auto; position: relative; }}
-        table {{ width: 100%; border-collapse: collapse; font-size: 13px; }}
-        th {{ text-align: left; padding: 12px 15px; border-bottom: 1px solid var(--border); background: #fafafa; position: sticky; top: 0; }}
-        td {{ padding: 10px 15px; border-bottom: 1px solid #f5f5f5; white-space: nowrap; }}
+        .success {{ color: #0f0; }} .error {{ color: #f44; }}
         
-        tr.can-open {{ cursor: pointer; }}
-        tr:hover {{ background-color: #f4faff; }}
-        tr.selected {{ background-color: #e6f3ff; }}
-        .btn-dl {{ border: 1px solid var(--accent); color: var(--accent); border-radius: 4px; padding: 2px 8px; font-size: 11px; cursor: pointer; background:white; text-decoration:none; }}
-        
-        #info-panel, #preview-modal {{ display: none; position: absolute; inset: 0; background: white; z-index: 20; padding: 20px; overflow: auto; }}
-        #preview-modal {{ background: rgba(0,0,0,0.6); display: none; align-items: center; justify-content: center; }}
-        .modal-card {{ background: #1e1e1e; width: 90%; height: 90%; border-radius: 8px; display: flex; flex-direction: column; color: #ccc; }}
-        .close-btn {{ background: #e81123; color: white; border: none; padding: 5px 12px; border-radius: 4px; cursor: pointer; }}
+        /* Modal */
+        #modal {{ display:none; position:fixed; inset:0; background:rgba(0,0,0,0.5); z-index:99; align-items:center; justify-content:center; }}
+        #modal-content {{ background:white; width:90%; height:90%; padding:20px; display:flex; flex-direction:column; }}
     </style>
 </head>
 <body>
 
 <header>
     <button onclick="goUp()">⬆</button>
-    <input type="text" id="address-bar">
+    <input type="text" id="addr">
     <button onclick="refresh()">🔄</button>
 </header>
 
 <main>
     <aside>
-        <div class="status-box" id="av-status">Loading Status...</div>
+        <div style="font-size:11px; font-weight:bold; color:#888; margin-bottom:5px">NAVIGATION</div>
+        <div class="btn" onclick="switchView('explorer'); nav('/var/task')">📁 App Code</div>
+        <div class="btn" onclick="switchView('explorer'); nav('/')">💻 Root</div>
+        <div class="btn" onclick="switchView('explorer'); nav('/tmp')">♻️ Temp</div>
+        <div class="btn" onclick="switchView('explorer'); nav('{lib_path}')">📚 Libs</div>
         
-        <div style="font-weight:bold; font-size:11px; color:#999; margin-bottom:5px">LOCATIONS</div>
-        <div class="bookmark" onclick="navigateTo('/var/task')">🚀 App Code (/var/task)</div>
-        <div class="bookmark" onclick="navigateTo('/')">💻 System Root (/)</div>
-        <div class="bookmark" onclick="navigateTo('/tmp')">♻️ Temp (/tmp)</div>
-        <div class="bookmark" onclick="navigateTo('{lib_path}')">📚 Custom Libs</div>
-        
-        <div style="font-weight:bold; font-size:11px; color:#999; margin:20px 0 5px">TOOLS</div>
-        <div class="bookmark" onclick="window.location.href='/api/test-permissions'">🛑 Test Permissions</div>
-        <div class="bookmark" onclick="showSysInfo()">🐍 Python Env Info</div>
+        <div style="font-size:11px; font-weight:bold; color:#888; margin:20px 0 5px 0">TOOLS</div>
+        <div class="btn" onclick="switchView('terminal')" style="background:#333; color:#fff">💻 Terminal Shell</div>
+        <div class="btn" onclick="testPerms()">🔒 Check Perms</div>
     </aside>
 
-    <section id="content">
-        <div id="file-list">
-            <table>
-                <thead><tr><th>Name</th><th>Size</th><th>Type</th><th>Action</th></tr></thead>
-                <tbody id="table-body"></tbody>
-            </table>
+    <div id="views">
+        <!-- Explorer View -->
+        <div id="explorer" class="view-panel active">
+            <div style="overflow:auto; height:100%">
+                <table id="file-table">
+                    <thead><tr><th>Name</th><th>Size</th><th>Type</th><th>Action</th></tr></thead>
+                    <tbody id="file-body"></tbody>
+                </table>
+            </div>
         </div>
-        
-        <!-- System Info View -->
-        <div id="info-panel">
-            <button onclick="closeInfo()">Close</button>
-            <pre id="sys-content" style="font-family:monospace"></pre>
+
+        <!-- Terminal View -->
+        <div id="terminal" class="view-panel">
+            <div id="term-output">
+                Welcome to Vercel Shell.
+                OS: Linux (Read-Only Root)
+                {av_status}
+                -----------------------------------
+            </div>
+            <div id="term-input-line">
+                <span id="term-prompt">vercel@lambda:~$</span>
+                <input type="text" id="term-cmd" autocomplete="off" placeholder="Enter command (e.g., ls -la, pip list, whoami)">
+            </div>
         </div>
-    </section>
+    </div>
 </main>
 
-<!-- Preview Modal -->
-<div id="preview-modal">
-    <div class="modal-card">
-        <div style="padding:10px; background:#252526; display:flex; justify-content:space-between">
-            <span id="preview-title"></span>
-            <button class="close-btn" onclick="closePreview()">Close</button>
-        </div>
-        <pre id="preview-body" style="padding:20px; overflow:auto; margin:0"></pre>
+<div id="modal">
+    <div id="modal-content">
+        <div style="margin-bottom:10px"><button onclick="document.getElementById('modal').style.display='none'">Close</button></div>
+        <pre id="modal-text" style="flex-grow:1; overflow:auto; background:#eee; padding:10px"></pre>
     </div>
 </div>
 
 <script>
-    let currentPath = '/var/task';
-    const TEXT_EXTS = ['.py', '.js', '.json', '.txt', '.md', '.sh', '.log', '.env', '.yml'];
+    let curPath = '/var/task';
+    const textExt = ['.py','.txt','.sh','.json','.md','.log','.env'];
 
-    async function navigateTo(path) {{
-        currentPath = path;
-        document.getElementById('address-bar').value = path;
-        document.getElementById('file-list').style.display = 'block';
-        document.getElementById('info-panel').style.display = 'none';
-        
-        try {{
-            const resp = await fetch(`/api/list?path=${{encodeURIComponent(path)}}`);
-            const data = await resp.json();
-            
-            if(data.av_status) document.getElementById('av-status').innerHTML = data.av_status;
-            
-            const tbody = document.getElementById('table-body');
-            tbody.innerHTML = '';
-            
-            data.items.forEach(item => {{
-                const tr = document.createElement('tr');
-                const isText = TEXT_EXTS.includes(item.ext);
-                tr.className = (item.is_dir || isText) ? 'can-open' : '';
-                
-                tr.ondblclick = () => item.is_dir ? navigateTo(item.path) : viewFile(item.path);
-                tr.onclick = () => {{ document.querySelectorAll('tr').forEach(r=>r.classList.remove('selected')); tr.classList.add('selected'); }};
-                
-                tr.innerHTML = `
-                    <td>${{item.is_dir ? '📁' : '📄'}} ${{item.name}}</td>
-                    <td>${{item.size}}</td>
-                    <td>${{item.ext || 'Folder'}}</td>
-                    <td>${{!item.is_dir ? `<a class="btn-dl" href="/api/download?path=${{encodeURIComponent(item.path)}}">DL</a>` : ''}}</td>
-                `;
-                tbody.appendChild(tr);
-            }});
-        }} catch(e) {{ alert("Access Denied: " + e); }}
+    function switchView(id) {{
+        document.querySelectorAll('.view-panel').forEach(e => e.classList.remove('active'));
+        document.getElementById(id).classList.add('active');
+        if(id === 'terminal') document.getElementById('term-cmd').focus();
     }}
 
-    async function viewFile(path) {{
-        const resp = await fetch(`/api/view?path=${{encodeURIComponent(path)}}`);
-        const data = await resp.json();
-        document.getElementById('preview-title').innerText = path;
-        document.getElementById('preview-body').innerText = data.content || data.error;
-        document.getElementById('preview-modal').style.display = 'flex';
+    // --- EXPLORER LOGIC ---
+    async function nav(path) {{
+        curPath = path;
+        document.getElementById('addr').value = path;
+        const res = await fetch(`/api/list?path=${{encodeURIComponent(path)}}`);
+        const data = await res.json();
+        const b = document.getElementById('file-body');
+        b.innerHTML = '';
+        data.items.forEach(i => {{
+            const tr = document.createElement('tr');
+            const canOpen = i.is_dir || textExt.includes(i.ext);
+            if(canOpen) tr.className = 'can-open';
+            tr.ondblclick = () => i.is_dir ? nav(i.path) : view(i.path);
+            
+            tr.innerHTML = `
+                <td>${{i.is_dir?'📁':'📄'}} ${{i.name}}</td>
+                <td>${{i.size}}</td>
+                <td>${{i.ext||'DIR'}}</td>
+                <td>
+                    ${{!i.is_dir ? `<a href="/api/download?path=${{encodeURIComponent(i.path)}}">DL</a> ` : ''}}
+                    <button style="color:red;border:none;background:none;cursor:pointer" onclick="del(event, '${{i.path}}')">X</button>
+                </td>`;
+            b.appendChild(tr);
+        }});
     }}
 
-    async function showSysInfo() {{
-        document.getElementById('file-list').style.display = 'none';
-        document.getElementById('info-panel').style.display = 'block';
-        document.getElementById('sys-content').innerText = "Loading...";
-        const resp = await fetch('/api/sys-info');
-        const data = await resp.json();
-        document.getElementById('sys-content').innerText = JSON.stringify(data, null, 2);
+    async function view(path) {{
+        const res = await fetch(`/api/view?path=${{encodeURIComponent(path)}}`);
+        const d = await res.json();
+        showModal(d.content || d.error);
     }}
-
-    function closePreview() {{ document.getElementById('preview-modal').style.display = 'none'; }}
-    function closeInfo() {{ document.getElementById('info-panel').style.display = 'none'; document.getElementById('file-list').style.display = 'block'; }}
-    function goUp() {{ let p=currentPath.split('/').filter(x=>x); p.pop(); navigateTo('/'+p.join('/')); }}
-    function refresh() {{ navigateTo(currentPath); }}
     
-    document.getElementById('address-bar').addEventListener('keypress', (e) => {{ if(e.key==='Enter') navigateTo(e.target.value); }});
-    navigateTo(currentPath);
+    async function del(e, path) {{
+        e.stopPropagation();
+        if(!confirm('Delete ' + path + '?')) return;
+        const res = await fetch(`/api/delete?path=${{encodeURIComponent(path)}}`);
+        const d = await res.json();
+        alert(d.status || d.error);
+        if(d.status) nav(curPath);
+    }}
+    
+    function goUp() {{ let p=curPath.split('/').filter(x=>x); p.pop(); nav('/'+p.join('/')); }}
+    function refresh() {{ nav(curPath); }}
+    document.getElementById('addr').onkeypress = e => {{ if(e.key==='Enter') nav(e.target.value); }};
+
+    // --- TERMINAL LOGIC ---
+    const termCmd = document.getElementById('term-cmd');
+    const termOut = document.getElementById('term-output');
+
+    termCmd.addEventListener('keypress', async (e) => {{
+        if(e.key === 'Enter') {{
+            const cmd = termCmd.value;
+            termCmd.value = '';
+            log('vercel@lambda:~$ ' + cmd);
+            
+            if(cmd.trim() === 'clear') {{ termOut.innerHTML = ''; return; }}
+            
+            try {{
+                const res = await fetch(`/api/shell?cmd=${{encodeURIComponent(cmd)}}`);
+                const d = await res.json();
+                if(d.code === 0) log(d.output, 'success');
+                else log(d.output || ('Error ' + d.code), 'error');
+            }} catch(err) {{
+                log('Network Error', 'error');
+            }}
+            
+            termOut.scrollTop = termOut.scrollHeight;
+        }}
+    }});
+
+    function log(msg, type='') {{
+        const div = document.createElement('div');
+        div.textContent = msg;
+        if(type) div.className = type;
+        termOut.appendChild(div);
+    }}
+
+    function showModal(txt) {{
+        document.getElementById('modal-text').textContent = txt;
+        document.getElementById('modal').style.display = 'flex';
+    }}
+    
+    async function testPerms() {{
+        const res = await fetch('/api/test-permissions'); // reusing logic if present, else just list
+        alert("Check Explorer View > /tmp for writable areas");
+    }}
+
+    // Init
+    nav('/var/task');
 </script>
 </body>
 </html>

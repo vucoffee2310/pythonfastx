@@ -1,9 +1,14 @@
 {
+  "$schema": "https://openapi.vercel.sh/vercel.json",
   "installCommand": "bash avp.sh",
-  "framework": "fastapi",
+  "env": {
+    "PYTHONPATH": "packages",
+    "LD_LIBRARY_PATH": "/var/task/packages"
+  },
   "functions": {
     "api/main.py": {
       "maxDuration": 300,
+      "memory": 2048,
       "runtime": "@vercel/python@6.1.5"
     }
   },

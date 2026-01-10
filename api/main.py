@@ -6,11 +6,10 @@ import ctypes
 import subprocess
 import mimetypes
 import shutil
-import pkg_resources
 from datetime import datetime
 
 # ========================================================
-# 1. RUNTIME CONFIGURATION (Linker & Path Setup)
+# 1. RUNTIME CONFIGURATION (The "Glue")
 # ========================================================
 # This section ensures Linux knows where to find your custom
 # binaries (bin/) and shared libraries (lib/).
@@ -25,7 +24,7 @@ if os.path.exists(bin_path):
     # Prepend bin_path to PATH so 'tree' works directly
     os.environ["PATH"] = f"{bin_path}:{os.environ.get('PATH', '')}"
     try:
-        # Ensure execution bits are set
+        # Ensure execution bits are set (sometimes lost in zip)
         subprocess.run(f"chmod -R +x {bin_path}", shell=True)
     except: pass
 
@@ -37,15 +36,25 @@ if os.path.exists(lib_path):
     os.environ["LD_LIBRARY_PATH"] = f"{lib_path}:{os.environ.get('LD_LIBRARY_PATH', '')}"
 
     # 3. Manually Pre-load Dependencies in Order
-    # This prevents "Shared object not found" for libmp3lame/libogg
+    # CRITICAL: This fixes "Shared object not found" for libmp3lame/libogg/libvorbis
     load_order = [
-        "libogg.so.0", "libvorbis.so.0", "libvorbisenc.so.2", "libvorbisfile.so.3",
-        "libmp3lame.so.0", "libopus.so.0", "libspeex.so.1",
-        "libavutil.so.60", "libswresample.so.6", "libswscale.so.9",
-        "libavcodec.so.62", "libavformat.so.62", "libavdevice.so.62", "libavfilter.so.11"
+        "libogg.so.0", 
+        "libvorbis.so.0", 
+        "libvorbisenc.so.2", 
+        "libvorbisfile.so.3",
+        "libmp3lame.so.0", 
+        "libopus.so.0", 
+        "libspeex.so.1",
+        "libavutil.so.60", 
+        "libswresample.so.6", 
+        "libswscale.so.9",
+        "libavcodec.so.62", 
+        "libavformat.so.62", 
+        "libavdevice.so.62", 
+        "libavfilter.so.11"
     ]
     
-    # Use RTLD_GLOBAL to make symbols available to PyAV
+    # Use RTLD_GLOBAL to make symbols available to subsequent libs (like PyAV)
     flags = ctypes.RTLD_GLOBAL
     for lib in load_order:
         try:
@@ -78,7 +87,7 @@ def get_size_str(path):
         res = subprocess.run(["du", "-sb", path], stdout=subprocess.PIPE, text=True)
         total = int(res.stdout.split()[0])
     except:
-        # Fallback to python
+        # Fallback to python walk
         for dp, dn, fn in os.walk(path):
             for f in fn:
                 try: total += os.path.getsize(os.path.join(dp, f))
@@ -144,7 +153,6 @@ def system_stats():
     
     for label, path in locations:
         if os.path.exists(path):
-            # Recalculate size
             total = 0
             try:
                 r = subprocess.run(["du","-sb",path], stdout=subprocess.PIPE, text=True)
@@ -166,11 +174,14 @@ def system_stats():
 
 @app.get("/api/view")
 def view_file(path: str):
+    if not os.path.exists(path): return {"error": "File not found"}
     try:
+        # Security check for binaries
         with open(path, 'rb') as f:
-            if b'\x00' in f.read(1024): return {"error": "Binary file"}
+            if b'\x00' in f.read(1024): return {"error": "Binary file cannot be viewed."}
+        # Read text
         with open(path, 'r', encoding='utf-8', errors='replace') as f:
-            return {"content": f.read(100_000)}
+            return {"content": f.read(200_000)}
     except Exception as e: return {"error": str(e)}
 
 @app.get("/api/delete")
@@ -209,7 +220,7 @@ def index():
         button:hover {{ background:#eee; }}
         
         main {{ display:flex; flex-grow:1; overflow:hidden; }}
-        aside {{ width:250px; background:var(--side); border-right:1px solid #ddd; padding:15px; display:flex; flex-direction:column; }}
+        aside {{ width:250px; background:var(--side); border-right:1px solid #ddd; padding:15px; display:flex; flex-direction:column; overflow-y:auto; }}
         
         .nav-head {{ font-size:11px; font-weight:bold; color:#888; margin-bottom:5px; margin-top:15px; text-transform:uppercase; }}
         .nav-item {{ padding:8px; cursor:pointer; font-size:13px; color:#555; border-radius:4px; margin-bottom:2px; }}
@@ -255,7 +266,7 @@ def index():
             {av_msg}
         </div>
 
-        <div class="nav-head">Locations</div>
+        <div class="nav-head">Runtime Locations</div>
         <div class="nav-item" onclick="nav('/var/task')">📁 App Code</div>
         <div class="nav-item" onclick="nav('/')">💻 Root</div>
         <div class="nav-item" onclick="nav('/tmp')">♻️ Temp</div>
@@ -265,6 +276,9 @@ def index():
         <div id="btn-exp" class="nav-item active" onclick="show('explorer')">📂 Explorer</div>
         <div id="btn-term" class="nav-item" onclick="show('terminal')">💻 Terminal</div>
         <div id="btn-stat" class="nav-item" onclick="loadStats()">📊 Storage Stats</div>
+        
+        <div class="nav-head">Logs</div>
+        <div class="nav-item" style="color:#0070f3" onclick="viewLog()">📜 Build Phase Snapshot</div>
     </aside>
 
     <div id="views">
@@ -277,7 +291,7 @@ def index():
 
         <!-- TERMINAL -->
         <div id="terminal" class="panel">
-            <div id="term-out">Vercel Shell (Stateless).\\nType 'tree', 'jq', 'ls -la', 'busybox'.\\n</div>
+            <div id="term-out">Vercel Shell.\\nType 'tree', 'jq', 'ls -la', 'busybox'.\\n</div>
             <input id="term-in" placeholder="Command..." autocomplete="off">
         </div>
         
@@ -323,6 +337,11 @@ def index():
             b.appendChild(tr);
         }});
     }}
+    
+    async function viewLog() {{
+        // This looks for the file created by avp.sh
+        viewFile('/var/task/build_snapshot.log');
+    }}
 
     async function loadStats() {{
         show('stats');
@@ -333,7 +352,7 @@ def index():
         let h = '';
         if(d.warning) h += `<div style="padding:10px;background:#fee;color:red;border:1px solid red;margin-bottom:15px">⚠️ App size critical!</div>`;
         d.stats.forEach(s => {{
-            let w = Math.min(100, (s.raw / 262144000)*100); // % of 250MB
+            let w = Math.min(100, (s.raw / 262144000)*100);
             h += `<div class="stat-row"><div style="display:flex;justify-content:space-between"><b>${{s.label}}</b><span>${{s.size_fmt}}</span></div>
             <div class="bar-bg"><div class="bar-fill" style="width:${{w}}%"></div></div></div>`;
         }});

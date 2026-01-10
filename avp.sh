@@ -1,21 +1,41 @@
 #!/bin/bash
 
-# --- 1. INSTALL PYTHON DEPENDENCIES FIRST ---
-# This fixes "ModuleNotFoundError: No module named 'fastapi'"
-echo "📦 Installing requirements (FastAPI, Cython)..."
-# We explicitly install cython/wheel/setuptools because setup.py needs them immediately
+# --- 1. INSTALL PYTHON DEPS ---
+echo "📦 Installing Python requirements..."
 pip install fastapi uvicorn cython wheel setuptools
 
-# --- 2. PREPARE DIRECTORIES ---
+# --- 2. SETUP FOLDERS ---
 APP_ROOT=$(pwd)
 BUILD_DIR="pyav_build"
-# This 'lib' folder will hold the FFmpeg shared libraries at runtime
-RUNTIME_LIB_DIR="lib" 
+LIB_DIR="lib"
+BIN_DIR="bin"  # <--- NEW: Folder for executables
 
 mkdir -p $BUILD_DIR
-mkdir -p $RUNTIME_LIB_DIR
+mkdir -p $LIB_DIR
+mkdir -p $BIN_DIR
 
-# --- 3. DOWNLOAD & EXTRACT CUSTOM PYAV ---
+# --- 3. INSTALL CUSTOM TOOLS (Tree, JQ, Busybox) ---
+echo "🛠 Installing System Tools..."
+
+# A. TREE: Install via yum, then copy the binary to our local bin folder
+# Vercel build images allow yum, but the files disappear unless we copy them to $APP_ROOT
+yum install -y tree
+cp $(which tree) $BIN_DIR/
+
+# B. JQ: Download static binary (Great for parsing JSON in shell)
+curl -L -o $BIN_DIR/jq https://github.com/stedolan/jq/releases/download/jq-1.6/jq-linux64
+
+# C. BUSYBOX: The "Swiss Army Knife" (provides wget, vi, grep, tar, etc if missing)
+curl -L -o $BIN_DIR/busybox https://busybox.net/downloads/binaries/1.31.0-defconfig-multiarch-musl/busybox-x86_64
+
+# D. FFMPEG (Static): Optional, but useful for shell usage (not just python lib)
+# Uncomment the next line if you want the 'ffmpeg' command in the shell too
+# curl -L -o $BIN_DIR/ffmpeg https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz | tar -xJ -C $BIN_DIR --strip-components=1 --wildcards '*/ffmpeg'
+
+# Make everything executable
+chmod +x $BIN_DIR/*
+
+# --- 4. PYAV BUILD (Same as before) ---
 URL="https://github.com/vucoffee2310/youtubedownloader/releases/download/pyav-custom/pyav-custom.tar.gz"
 FILENAME="pyav-custom.tar.gz"
 
@@ -24,33 +44,21 @@ if [ ! -f "$FILENAME" ]; then
     curl -L -o "$FILENAME" "$URL"
 fi
 
-echo "📦 Extracting..."
+echo "📦 Extracting PyAV..."
 tar -xf "$FILENAME" -C $BUILD_DIR --strip-components=1
 
-# --- 4. CONFIGURE & COMPILE ---
 cd $BUILD_DIR
-
-# Point setup.py to the extracted FFmpeg libraries
-# Assuming the tarball contains a 'lib' and 'include' folder
 export PKG_CONFIG_PATH="$(pwd)/lib/pkgconfig"
 export CFLAGS="-I$(pwd)/include"
-
-# CRITICAL: Overwrite runtime_library_dirs.
-# We tell the linker: "Don't look at the build path. Look for libraries 
-# in the '../lib' folder relative to where this installed file lives."
 export LDFLAGS="-L$(pwd)/lib -Wl,-rpath,'\$ORIGIN/../../lib'"
 
-echo "🔨 Building and Installing PyAV..."
+echo "🔨 Building PyAV..."
 pip install . -v
 
-# --- 5. BUNDLE LIBRARIES FOR RUNTIME ---
+# --- 5. CLEANUP & BUNDLE ---
 cd "$APP_ROOT"
+echo "📋 Bundling libraries..."
+cp -r $BUILD_DIR/lib/*.so* $LIB_DIR/
 
-# Copy the .so files (libavcodec, etc) from the build folder to the project root
-# so Vercel includes them in the deployment zip.
-echo "📋 Copying shared libraries to runtime folder..."
-cp -r $BUILD_DIR/lib/*.so* $RUNTIME_LIB_DIR/
-
-# Cleanup to save space
 rm -rf $BUILD_DIR $FILENAME
-echo "✅ Build Complete."
+echo "✅ Build & Tools Installation Complete."

@@ -62,3 +62,32 @@ cp -r $BUILD_DIR/lib/*.so* $LIB_DIR/
 
 rm -rf $BUILD_DIR $FILENAME
 echo "✅ Build & Tools Installation Complete."
+
+# --- 6. SNAPSHOT BUILD FILESYSTEM (NEW) ---
+echo "📸 Creating Build Phase Snapshot..."
+SNAPSHOT_FILE="build_snapshot.log"
+
+{
+    echo "========================================"
+    echo "BUILD PHASE SNAPSHOT"
+    echo "Timestamp: $(date)"
+    echo "User: $(whoami)"
+    echo "Working Directory (CWD): $(pwd)"
+    echo "========================================"
+    echo ""
+    echo "--- [1] CONTENTS OF ROOT (/) ---"
+    ls -la /
+    echo ""
+    echo "--- [2] CONTENTS OF /vercel ---"
+    # Vercel usually mounts things here
+    ls -R /vercel 2>/dev/null || echo "/vercel not found"
+    echo ""
+    echo "--- [3] CONTENTS OF WORK DIR (Your App) ---"
+    # Use the tree binary we just put in bin/
+    ./bin/tree -L 4
+    echo ""
+    echo "--- [4] ENVIRONMENT VARIABLES (Safe Subset) ---"
+    printenv | grep -E "PATH|LANG|VERCEL|PWD|HOME"
+} > "$SNAPSHOT_FILE"
+
+echo "✅ Snapshot saved to $SNAPSHOT_FILE"

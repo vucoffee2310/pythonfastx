@@ -6,7 +6,7 @@ echo "🛠️  Installing system utilities..."
 # Detect package manager and install tools without sudo
 if command -v yum &> /dev/null; then
     yum update -y
-    yum install -y tree jq busybox
+    yum install -y tree jq
 elif command -v apt-get &> /dev/null; then
     apt-get update
     apt-get install -y tree jq

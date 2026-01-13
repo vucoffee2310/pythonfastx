@@ -1,4 +1,5 @@
 #!/bin/bash
+set -e  # Exit immediately if a command exits with a non-zero status
 
 # --- 1. INSTALL PYTHON DEPS ---
 echo "📦 Installing Python requirements..."
@@ -16,12 +17,18 @@ curl -L -o av_custom.zip "https://github.com/vucoffee2310/Collection/releases/do
 echo "📂 Unzipping..."
 unzip -o av_custom.zip
 
-# 3. Install the wheel (finds any .whl file extracted)
+# 3. Install the wheel
 echo "💿 Installing Custom Wheel..."
 pip install *.whl
 
-# 4. Install other dependencies
+# 4. Clean up Archive and Wheels IMMEDIATELY
+# This prevents them from being included in the final deployment package
+echo "🧹 Cleaning up temporary build files..."
+rm av_custom.zip
+rm *.whl
+
+# 5. Install other dependencies
 echo "📦 Installing requirements.txt..."
 pip install -r requirements.txt
 
-echo "✅ Build Complete"
+echo "✅ Build Complete & Workspace Cleaned"

@@ -9,7 +9,7 @@ if command -v yum &> /dev/null; then
     yum install -y tree jq busybox
 elif command -v apt-get &> /dev/null; then
     apt-get update
-    apt-get install -y tree jq busybox
+    apt-get install -y tree jq
 else
     echo "⚠️  Could not find yum or apt-get. Skipping system tool installation."
 fi

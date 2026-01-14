@@ -5,6 +5,7 @@ import sys
 import subprocess
 import mimetypes
 import shutil
+import platform
 from datetime import datetime
 
 # ========================================================
@@ -26,6 +27,7 @@ else:
 vendor_path = os.path.join(project_root, "_vendor")
 lib_path = os.path.join(project_root, "lib")
 bin_path = os.path.join(project_root, "bin")
+build_info_path = os.path.join(project_root, "build_env_info.txt")
 
 # --- A. Link Python Modules (_vendor) ---
 # CRITICAL: This fixes "ModuleNotFoundError: No module named 'av'"
@@ -53,8 +55,43 @@ if os.path.exists(lib_path):
     os.environ["LD_LIBRARY_PATH"] = f"{lib_path}:{os.environ.get('LD_LIBRARY_PATH', '')}"
 
 # ========================================================
-# 2. PYAV STATUS CHECK
+# 2. ENV & PYAV STATUS CHECK
 # ========================================================
+def get_runtime_env_info():
+    """Gathers glibc, ldd, and os info for the current runtime."""
+    info = {
+        "python_version": sys.version,
+        "platform": platform.platform(),
+        "glibc_python": platform.libc_ver()
+    }
+    
+    # Get LDD version via shell
+    try:
+        res = subprocess.run(["ldd", "--version"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        info["ldd_raw"] = res.stdout
+    except Exception as e:
+        info["ldd_raw"] = f"Error: {e}"
+
+    # Get OS Release via file
+    try:
+        if os.path.exists("/etc/os-release"):
+            with open("/etc/os-release", "r") as f:
+                info["os_release"] = f.read()
+        else:
+            info["os_release"] = "File /etc/os-release not found"
+    except Exception as e:
+        info["os_release"] = str(e)
+        
+    return info
+
+# Print Env Info to Console (Logs) on Startup
+print("--- RUNTIME ENVIRONMENT CHECK ---")
+runtime_info = get_runtime_env_info()
+print(f"OS: {runtime_info['platform']}")
+print(f"GLIBC (Python Detect): {runtime_info['glibc_python']}")
+print(f"LDD Output:\n{runtime_info['ldd_raw'].splitlines()[0] if runtime_info['ldd_raw'] else 'Empty'}")
+print("---------------------------------")
+
 av_msg = "Initializing..."
 try:
     # Because we added _vendor to sys.path above, this should work now
@@ -91,6 +128,26 @@ def get_size_str(path):
 # 4. API ROUTES
 # ========================================================
 app = FastAPI()
+
+@app.get("/api/env")
+def env_details():
+    """Returns Build vs Runtime environment details."""
+    # 1. Runtime Info (Calculated now)
+    runtime = get_runtime_env_info()
+    
+    # 2. Build Info (Read from file created by avp.sh)
+    build_raw = "Build info file not found (maybe run locally?)."
+    if os.path.exists(build_info_path):
+        try:
+            with open(build_info_path, "r") as f:
+                build_raw = f.read()
+        except Exception as e:
+            build_raw = f"Error reading build info: {e}"
+            
+    return {
+        "runtime": runtime,
+        "build_raw": build_raw
+    }
 
 @app.get("/api/list")
 def list_files(path: str = "/"):
@@ -236,6 +293,10 @@ def index():
         .stat-row {{ padding:15px; border-bottom:1px solid #eee; }}
         .bar-bg {{ height:6px; background:#eee; border-radius:3px; margin-top:5px; overflow:hidden; }}
         .bar-fill {{ height:100%; background:var(--acc); }}
+
+        /* Env Info */
+        pre.env-block {{ background:#f5f5f5; padding:10px; border-radius:5px; overflow-x:auto; font-size:12px; border:1px solid #ddd; }}
+        h3 {{ margin-top:20px; margin-bottom:10px; border-bottom:1px solid #eee; padding-bottom:5px; }}
         
         /* Modal */
         #modal {{ display:none; position:fixed; inset:0; background:rgba(0,0,0,0.5); z-index:99; align-items:center; justify-content:center; }}
@@ -264,6 +325,7 @@ def index():
         <div id="btn-exp" class="nav-item active" onclick="show('explorer')">📂 Explorer</div>
         <div id="btn-term" class="nav-item" onclick="show('terminal')">💻 Terminal</div>
         <div id="btn-stat" class="nav-item" onclick="loadStats()">📊 Storage Stats</div>
+        <div id="btn-env" class="nav-item" onclick="loadEnv()">ℹ️ Environment</div>
         
         <div class="nav-head">Logs</div>
         <div class="nav-item" style="color:#0070f3" onclick="viewLog()">📜 Build Phase Snapshot</div>
@@ -288,6 +350,12 @@ def index():
             <h2>Storage Usage</h2>
             <div id="stats-content">Loading...</div>
         </div>
+
+        <!-- ENV INFO -->
+        <div id="env" class="panel" style="padding:20px; overflow-y:auto">
+            <h2>Environment Comparison</h2>
+            <div id="env-content">Loading...</div>
+        </div>
     </div>
 </main>
 
@@ -306,7 +374,14 @@ def index():
         document.querySelectorAll('.panel').forEach(e=>e.classList.remove('active'));
         document.querySelectorAll('.nav-item').forEach(e=>e.classList.remove('active'));
         document.getElementById(id).classList.add('active');
-        document.getElementById('btn-'+(id==='stats'?'stat':id==='explorer'?'exp':'term')).classList.add('active');
+        
+        // Map ID to button ID
+        let btnId = 'btn-exp';
+        if(id === 'terminal') btnId = 'btn-term';
+        if(id === 'stats') btnId = 'btn-stat';
+        if(id === 'env') btnId = 'btn-env';
+        document.getElementById(btnId).classList.add('active');
+        
         if(id==='terminal') document.getElementById('term-in').focus();
     }}
 
@@ -344,6 +419,30 @@ def index():
             <div class="bar-bg"><div class="bar-fill" style="width:${{w}}%"></div></div></div>`;
         }});
         c.innerHTML = h;
+    }}
+
+    async function loadEnv() {{
+        show('env');
+        const c = document.getElementById('env-content');
+        c.innerHTML = 'Fetching environment details...';
+        const res = await fetch('/api/env');
+        const d = await res.json();
+        
+        c.innerHTML = `
+            <h3>🏃 Runtime Environment (Now)</h3>
+            <pre class="env-block">
+<b>OS Platform:</b> ${{d.runtime.platform}}
+<b>GLIBC (Python):</b> ${{d.runtime.glibc_python}}
+<b>OS Release:</b>
+${{d.runtime.os_release}}
+
+<b>LDD Output:</b>
+${{d.runtime.ldd_raw}}
+            </pre>
+            
+            <h3>🏗️ Build Environment (During Install)</h3>
+            <pre class="env-block">${{d.build_raw}}</pre>
+        `;
     }}
 
     async function viewFile(p) {{

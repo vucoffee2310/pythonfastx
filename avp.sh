@@ -5,12 +5,34 @@ echo "----------------------------------------"
 echo "🛠️  Starting Custom Build Script"
 echo "----------------------------------------"
 
-# 0. PREPARE LOCAL BIN FOLDER
+# ========================================================
+# 0. CAPTURE BUILD ENVIRONMENT INFO
+# ========================================================
+# We save this to a file so the Python app can read it 
+# at runtime to show you what the build server looked like.
+echo "🔍 Capturing Build Environment Metadata..."
+{
+  echo "=== BUILD DATE ==="
+  date
+  
+  echo -e "\n=== BUILD OS INFO (/etc/os-release) ==="
+  cat /etc/os-release || echo "N/A"
+  
+  echo -e "\n=== BUILD KERNEL (uname) ==="
+  uname -a
+  
+  echo -e "\n=== BUILD GLIBC / LDD VERSION ==="
+  ldd --version || echo "ldd not found"
+} | tee build_env_info.txt
+
+# ========================================================
+# 1. PREPARE LOCAL BIN FOLDER
+# ========================================================
 # We must create a local 'bin' directory. Vercel will include this 
 # in the deployment, unlike files installed to /usr/bin.
 mkdir -p bin
 
-# 1. INSTALL TREE (Install via yum, then grab the binary)
+# 2. INSTALL TREE (Install via yum, then grab the binary)
 if command -v yum &> /dev/null; then
     echo "🌲 Installing Tree via yum..."
     yum install -y tree
@@ -20,7 +42,7 @@ else
     echo "⚠️  Yum not found, skipping tree system install."
 fi
 
-# 2. INSTALL JQ (Download Static Binary)
+# 3. INSTALL JQ (Download Static Binary)
 # We download the static binary because the 'yum' version often depends 
 # on libraries (libonig) that won't exist in the runtime.
 echo "🦆 Downloading Static JQ..."
@@ -29,28 +51,28 @@ chmod +x bin/jq
 
 echo "✅ System tools copied to ./bin/"
 
-# 3. INSTALL PYTHON DEPS
+# 4. INSTALL PYTHON DEPS
 echo "📦 Installing Python requirements..."
 pip install fastapi uvicorn yt-dlp[default] aiohttp
 
-# 4. DOWNLOAD CUSTOM AV
+# 5. DOWNLOAD CUSTOM AV
 echo "⬇️  Downloading Custom AV Zip..."
-curl -L -o av_custom.zip "https://github.com/vucoffee2310/Collection/releases/download/ffmpeg-audio/av-16.1.0-cp311-abi3-manylinux_2_35_x86_64.zip"
+curl -L -o av_custom.zip "https://github.com/vucoffee2310/Collection/releases/download/ffmpeg-audio/av-16.1.0-cp311-abi3-manylinux_2_17_x86_64.zip"
 
-# 5. UNZIP
+# 6. UNZIP
 echo "📂 Unzipping..."
 unzip -o av_custom.zip
 
-# 6. INSTALL WHEEL
+# 7. INSTALL WHEEL
 echo "💿 Installing Custom Wheel..."
 pip install *.whl
 
-# 7. CLEANUP ARCHIVES AND WHEELS
+# 8. CLEANUP ARCHIVES AND WHEELS
 echo "🧹 Removing extracted files and archives..."
 rm -f av_custom.zip
 rm -f *.whl
 
-# 8. INSTALL PROJECT REQUIREMENTS
+# 9. INSTALL PROJECT REQUIREMENTS
 if [ -f requirements.txt ]; then
     echo "📦 Installing requirements.txt..."
     pip install -r requirements.txt

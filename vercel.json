@@ -10,7 +10,6 @@
       "runtime": "python3.11",
       "maxDuration": 300,
       "memory": 2048,
-      "runtime": "@vercel/python@6.1.5"
     }
   },
   "rewrites": [

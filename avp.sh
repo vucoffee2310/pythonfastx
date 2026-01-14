@@ -35,7 +35,7 @@ pip install fastapi uvicorn yt-dlp[default] aiohttp
 
 # 4. DOWNLOAD CUSTOM AV
 echo "⬇️  Downloading Custom AV Zip..."
-curl -L -o av_custom.zip "https://github.com/vucoffee2310/Collection/releases/download/ffmpeg-audio/av-16.1.0-cp311-abi3-manylinux_2_17_x86_64.zip"
+curl -L -o av_custom.zip "https://github.com/vucoffee2310/Collection/releases/download/ffmpeg-audio/av-16.1.0-cp311-abi3-manylinux_2_35_x86_64.zip"
 
 # 5. UNZIP
 echo "📂 Unzipping..."

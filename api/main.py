@@ -2,16 +2,15 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse, FileResponse
 import os
 import sys
-import ctypes
 import subprocess
 import mimetypes
 import shutil
 from datetime import datetime
 
 # ========================================================
-# 1. RUNTIME CONFIGURATION (The "Glue")
+# 1. RUNTIME CONFIGURATION
 # ========================================================
-# This section ensures Linux knows where to find your custom
+# This section configures the environment to find your custom
 # binaries (bin/) and shared libraries (lib/).
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -20,55 +19,30 @@ lib_path = os.path.join(project_root, "lib")
 bin_path = os.path.join(project_root, "bin")
 
 # --- A. Link Executables (PATH) ---
+# Allows you to run 'ffmpeg' or 'ffprobe' if you put the binaries in /bin
 if os.path.exists(bin_path):
-    # Prepend bin_path to PATH so 'tree' works directly
     os.environ["PATH"] = f"{bin_path}:{os.environ.get('PATH', '')}"
     try:
-        # Ensure execution bits are set (sometimes lost in zip)
         subprocess.run(f"chmod -R +x {bin_path}", shell=True)
     except: pass
 
-# --- B. Link Libraries (LD_LIBRARY_PATH & Preload) ---
+# --- B. Link Libraries (LD_LIBRARY_PATH) ---
+# 1. Helps Python find packages installed in /lib
 if os.path.exists(lib_path):
-    # 1. Add to Python Path
     sys.path.append(lib_path)
-    # 2. Add to Linker Path
-    os.environ["LD_LIBRARY_PATH"] = f"{lib_path}:{os.environ.get('LD_LIBRARY_PATH', '')}"
 
-    # 3. Manually Pre-load Dependencies in Order
-    # CRITICAL: This fixes "Shared object not found" for libmp3lame/libogg/libvorbis
-    load_order = [
-        "libogg.so.0", 
-        "libvorbis.so.0", 
-        "libvorbisenc.so.2", 
-        "libvorbisfile.so.3",
-        "libmp3lame.so.0", 
-        "libopus.so.0", 
-        "libspeex.so.1",
-        "libavutil.so.60", 
-        "libswresample.so.6", 
-        "libswscale.so.9",
-        "libavcodec.so.62", 
-        "libavformat.so.62", 
-        "libavdevice.so.62", 
-        "libavfilter.so.11"
-    ]
-    
-    # Use RTLD_GLOBAL to make symbols available to subsequent libs (like PyAV)
-    flags = ctypes.RTLD_GLOBAL
-    for lib in load_order:
-        try:
-            # Find the actual filename (ignoring version suffixes like .1.2)
-            candidates = [f for f in os.listdir(lib_path) if f.startswith(lib)]
-            if candidates:
-                ctypes.CDLL(os.path.join(lib_path, candidates[0]), mode=flags)
-        except: pass
+# 2. Helps external binaries find .so files in /lib
+# (Note: We rely on standard 'import av' to find its own bundled libs automatically)
+if os.path.exists(lib_path):
+    os.environ["LD_LIBRARY_PATH"] = f"{lib_path}:{os.environ.get('LD_LIBRARY_PATH', '')}"
 
 # ========================================================
 # 2. PYAV STATUS CHECK
 # ========================================================
 av_msg = "Initializing..."
 try:
+    # Standard import. If 'av' is installed via pip/auditwheel,
+    # it will automatically find its internal libraries.
     import av
     av_msg = f"✅ PyAV {av.__version__} Ready | Codecs: {len(av.codecs_available)}"
 except ImportError as e:
@@ -82,7 +56,7 @@ except Exception as e:
 def get_size_str(path):
     """Calculates folder size nicely."""
     total = 0
-    # Use 'du' if available for speed
+    # Use 'du' if available for speed (Linux)
     try:
         res = subprocess.run(["du", "-sb", path], stdout=subprocess.PIPE, text=True)
         total = int(res.stdout.split()[0])
@@ -112,7 +86,7 @@ def list_files(path: str = "/"):
             # Sort: Directories first, then files
             for e in sorted(entries, key=lambda x: (not x.is_dir(), x.name.lower())):
                 try:
-                    s = e.stat()
+                    # s = e.stat() # unused, but logic kept for reference
                     items.append({
                         "name": e.name, "path": e.path, "is_dir": e.is_dir(),
                         "size": get_size_str(e.path) if not e.is_dir() else "-",
@@ -339,7 +313,6 @@ def index():
     }}
     
     async function viewLog() {{
-        // This looks for the file created by avp.sh
         viewFile('/var/task/build_snapshot.log');
     }}
 
@@ -392,7 +365,6 @@ def index():
         }}
     }};
     
-    // Init
     nav('/var/task');
 </script>
 </body>

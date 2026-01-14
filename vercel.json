@@ -7,7 +7,7 @@
   },
   "functions": {
     "api/main.py": {
-      "runtime": "python3.12",
+      "runtime": "python3.11",
       "maxDuration": 300,
       "memory": 2048,
       "runtime": "@vercel/python@6.1.5"

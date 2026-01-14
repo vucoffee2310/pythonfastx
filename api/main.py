@@ -10,29 +10,45 @@ from datetime import datetime
 # ========================================================
 # 1. RUNTIME CONFIGURATION
 # ========================================================
-# This section configures the environment to find your custom
-# binaries (bin/) and shared libraries (lib/).
+# This section ensures Vercel looks in '_vendor' for packages
+# and 'bin' for executables.
 
+# 1. Determine Project Root
+# Vercel usually mounts the app in /var/task. We check for that first.
 current_dir = os.path.dirname(os.path.abspath(__file__))
-project_root = os.path.dirname(current_dir)
+if os.path.exists("/var/task"):
+    project_root = "/var/task"
+else:
+    # Fallback for local testing or different structure
+    project_root = os.getcwd()
+
+# 2. Define Paths
+vendor_path = os.path.join(project_root, "_vendor")
 lib_path = os.path.join(project_root, "lib")
 bin_path = os.path.join(project_root, "bin")
 
-# --- A. Link Executables (PATH) ---
-# Allows you to run 'ffmpeg' or 'ffprobe' if you put the binaries in /bin
+# --- A. Link Python Modules (_vendor) ---
+# CRITICAL: This fixes "ModuleNotFoundError: No module named 'av'"
+if os.path.exists(vendor_path):
+    # 1. Add to the running application's path immediately
+    if vendor_path not in sys.path:
+        sys.path.insert(0, vendor_path)
+    
+    # 2. Add to Environment Variable so subprocesses (Terminal) find it too
+    current_pp = os.environ.get("PYTHONPATH", "")
+    os.environ["PYTHONPATH"] = f"{vendor_path}:{current_pp}"
+
+# --- B. Link Executables (PATH) ---
+# Allows running './bin/ffmpeg' commands easily
 if os.path.exists(bin_path):
     os.environ["PATH"] = f"{bin_path}:{os.environ.get('PATH', '')}"
     try:
+        # Ensure they are executable
         subprocess.run(f"chmod -R +x {bin_path}", shell=True)
     except: pass
 
-# --- B. Link Libraries (LD_LIBRARY_PATH) ---
-# 1. Helps Python find packages installed in /lib
-if os.path.exists(lib_path):
-    sys.path.append(lib_path)
-
-# 2. Helps external binaries find .so files in /lib
-# (Note: We rely on standard 'import av' to find its own bundled libs automatically)
+# --- C. Link Shared Libraries (LD_LIBRARY_PATH) ---
+# Helps external binaries find .so files in /lib
 if os.path.exists(lib_path):
     os.environ["LD_LIBRARY_PATH"] = f"{lib_path}:{os.environ.get('LD_LIBRARY_PATH', '')}"
 
@@ -41,12 +57,11 @@ if os.path.exists(lib_path):
 # ========================================================
 av_msg = "Initializing..."
 try:
-    # Standard import. If 'av' is installed via pip/auditwheel,
-    # it will automatically find its internal libraries.
+    # Because we added _vendor to sys.path above, this should work now
     import av
     av_msg = f"✅ PyAV {av.__version__} Ready | Codecs: {len(av.codecs_available)}"
 except ImportError as e:
-    av_msg = f"❌ Import Error: {e}"
+    av_msg = f"❌ Import Error: {e} (Path: {sys.path})"
 except Exception as e:
     av_msg = f"❌ Runtime Error: {e}"
 
@@ -56,7 +71,7 @@ except Exception as e:
 def get_size_str(path):
     """Calculates folder size nicely."""
     total = 0
-    # Use 'du' if available for speed (Linux)
+    # Use 'du' if available for speed
     try:
         res = subprocess.run(["du", "-sb", path], stdout=subprocess.PIPE, text=True)
         total = int(res.stdout.split()[0])
@@ -86,7 +101,6 @@ def list_files(path: str = "/"):
             # Sort: Directories first, then files
             for e in sorted(entries, key=lambda x: (not x.is_dir(), x.name.lower())):
                 try:
-                    # s = e.stat() # unused, but logic kept for reference
                     items.append({
                         "name": e.name, "path": e.path, "is_dir": e.is_dir(),
                         "size": get_size_str(e.path) if not e.is_dir() else "-",
@@ -101,10 +115,10 @@ def run_shell(cmd: str):
     """Run a shell command (Stateless)."""
     if not cmd: return {"out": ""}
     try:
-        # Run command with 5s timeout
+        # We pass os.environ to ensure the shell sees the new PYTHONPATH
         res = subprocess.run(
             cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, 
-            text=True, timeout=5, cwd=os.getcwd()
+            text=True, timeout=5, cwd=project_root, env=os.environ
         )
         return {"out": res.stdout}
     except subprocess.TimeoutExpired: return {"out": "Error: Command timed out."}
@@ -119,10 +133,10 @@ def system_stats():
     # Check key directories
     locations = [
         ("App Code", "/var/task"),
+        ("Vendor Libs", vendor_path),
+        ("Binaries", bin_path),
         ("Libraries", lib_path),
-        ("Tools", bin_path),
-        ("Temp", "/tmp"),
-        ("Python", "/var/lang")
+        ("Temp", "/tmp")
     ]
     
     for label, path in locations:
@@ -231,7 +245,7 @@ def index():
 <body>
 <header>
     <button onclick="up()">⬆</button>
-    <input id="addr" value="/var/task">
+    <input id="addr" value="{project_root}">
     <button onclick="ref()">🔄</button>
 </header>
 <main>
@@ -241,10 +255,10 @@ def index():
         </div>
 
         <div class="nav-head">Runtime Locations</div>
-        <div class="nav-item" onclick="nav('/var/task')">📁 App Code</div>
+        <div class="nav-item" onclick="nav('{project_root}')">📁 App Code</div>
+        <div class="nav-item" onclick="nav('{vendor_path}')">📦 _vendor</div>
         <div class="nav-item" onclick="nav('/')">💻 Root</div>
         <div class="nav-item" onclick="nav('/tmp')">♻️ Temp</div>
-        <div class="nav-item" onclick="nav('{lib_path}')">📚 Libraries</div>
         
         <div class="nav-head">Tools</div>
         <div id="btn-exp" class="nav-item active" onclick="show('explorer')">📂 Explorer</div>
@@ -285,7 +299,7 @@ def index():
 </div>
 
 <script>
-    let cur = '/var/task';
+    let cur = '{project_root}';
     const txts = ['.py','.txt','.sh','.json','.md','.log','.env'];
 
     function show(id) {{
@@ -365,7 +379,7 @@ def index():
         }}
     }};
     
-    nav('/var/task');
+    nav(cur);
 </script>
 </body>
 </html>

@@ -14,7 +14,7 @@ echo "🔗 Shortcut Check: $(ls -l "$PY_PATH")"
 echo "🏠 Real Home: $(python3 -c 'import os; print(os.path.realpath(os.sys.executable))')"
 echo "----------------------------------------"
 
-# --- 1. Environment Metadata (Run once) ---
+# --- 1. Environment Metadata ---
 if [ ! -f "build_env_info.txt" ]; then
     echo "🔍 Capturing Build Environment Metadata..."
     {
@@ -101,7 +101,7 @@ echo "📊 Final Workspace Check"
 ./bin/tree -L 2 bin/
 
 # ========================================================
-# 8. BUILD ARTIFACT GENERATION (Snapshots)
+# 8. BUILD ARTIFACT GENERATION (Minimal Tree)
 # ========================================================
 
 echo "📝 Cataloging Build Tools..."
@@ -113,51 +113,48 @@ with open('build_tools.json', 'w') as f:
     json.dump(data, f, indent=2)
 "
 
-echo "📸 Snapshotting FULL Build File System (excluding virtual paths)..."
+echo "📸 Generating Ultra-Minimal Tree Snapshot (build_fs.index)..."
 python3 -c "
 import os
 
-index_file = 'build_fs.index'
-
-# Skip virtual filesystems that cause hangs or infinite loops
-SKIP_DIRS = {'/proc', '/sys', '/dev', '/run', '/tmp', '/var/run', '/var/cache'}
+SKIP_DIRS = {'/proc', '/sys', '/dev', '/run', '/tmp', '/var/run', '/var/cache', '/boot'}
 
 def should_skip(path):
-    # Check strict match or prefix
     for s in SKIP_DIRS:
-        if path == s or path.startswith(s + '/'):
-            return True
+        if path == s or path.startswith(s + '/'): return True
     return False
 
-count = 0
-with open(index_file, 'w', encoding='utf-8') as f:
-    # Walk from root
-    for root, dirs, files in os.walk('/'):
-        # Filter directories in-place to prevent traversing skipped paths
-        dirs[:] = [d for d in dirs if not should_skip(os.path.join(root, d))]
-        
-        # Log directory entries
-        for name in dirs:
-            path = os.path.join(root, name)
-            f.write(f'D|0|{path}\n')
-            count += 1
-            
-        # Log file entries
-        for name in files:
-            path = os.path.join(root, name)
-            if should_skip(path): continue
-            
-            try:
-                # Use lstat to avoid following symlinks into void
-                stat = os.lstat(path)
-                size = stat.st_size
-                f.write(f'F|{size}|{path}\n')
-                count += 1
-            except:
-                # Permission denied or disappeared
-                f.write(f'F|0|{path}\n')
+def print_tree(start_path, f, depth=0):
+    try:
+        # Sort directories first, then files
+        entries = sorted(os.scandir(start_path), key=lambda e: (not e.is_dir(), e.name.lower()))
+    except PermissionError:
+        return
 
-print(f'✅ Full Snapshot Complete: {count} entries saved to {index_file}')
+    indent = ' ' * depth
+    
+    for entry in entries:
+        if should_skip(entry.path): continue
+        
+        try:
+            name = entry.name
+            if entry.is_dir():
+                # Directory format: '  name/'
+                f.write(f'{indent}{name}/\n')
+                print_tree(entry.path, f, depth + 1)
+            else:
+                # File format: '  name'
+                f.write(f'{indent}{name}\n')
+        except OSError:
+            pass
+
+with open('build_fs.index', 'w', encoding='utf-8') as f:
+    # Write root manually
+    f.write('/\n')
+    # Recursively scan
+    print_tree('/', f, 1)
+
+print('✅ Tree snapshot generated.')
 "
 
 echo "✅ Build Process Complete"

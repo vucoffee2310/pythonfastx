@@ -1,5 +1,6 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Body
 from fastapi.responses import HTMLResponse, FileResponse, StreamingResponse
+from pydantic import BaseModel
 import os
 import sys
 import subprocess
@@ -82,11 +83,9 @@ except Exception as e:
     av_msg = f"❌ Runtime Error: {e}"
 
 # --- IMPORT TESTFLY ---
-# We import this after path patching so it can find 'av'
 try:
     from . import testfly
 except ImportError:
-    # Fallback if running locally directly
     import testfly
 
 # ========================================================
@@ -113,12 +112,23 @@ def get_size_str(path):
 # ========================================================
 app = FastAPI()
 
-@app.get("/api/fly")
-async def fly_process():
+class FlyRequest(BaseModel):
+    url: str
+    cookies: str
+    args: str = "youtube:player_client=all"
+
+@app.post("/api/fly")
+async def fly_process(payload: FlyRequest):
     """Starts the testfly process and streams logs."""
     q = asyncio.Queue()
-    # Run the complex logic in background
-    asyncio.create_task(testfly.run_fly_process(q))
+    
+    # Run in background with provided payload
+    asyncio.create_task(testfly.run_fly_process(
+        q, 
+        payload.url, 
+        payload.cookies, 
+        payload.args
+    ))
     
     async def log_generator():
         while True:
@@ -272,6 +282,11 @@ def index():
         pre.env-block {{ background:#f5f5f5; padding:10px; border-radius:5px; overflow-x:auto; font-size:12px; border:1px solid #ddd; }}
         h3 {{ margin-top:20px; margin-bottom:10px; border-bottom:1px solid #eee; padding-bottom:5px; }}
         
+        /* Fly Form */
+        .fly-form {{ padding:10px; border-bottom:1px solid #ddd; background:#f9f9f9; display:flex; flex-direction:column; gap:10px; }}
+        .fly-row {{ display:flex; gap:10px; }}
+        input, textarea {{ border:1px solid #ccc; padding:5px; border-radius:3px; font-family:monospace; font-size:12px; }}
+        
         /* Modal */
         #modal {{ display:none; position:fixed; inset:0; background:rgba(0,0,0,0.5); z-index:99; align-items:center; justify-content:center; }}
         .card {{ background:white; width:90%; height:90%; padding:20px; display:flex; flex-direction:column; border-radius:8px; }}
@@ -322,11 +337,15 @@ def index():
         
         <!-- TESTFLY -->
         <div id="fly" class="panel">
-            <div style="padding:10px; border-bottom:1px solid #ddd; display:flex; align-items:center; gap:10px; background:#f5f5f5;">
-                <button style="background:var(--acc); color:white; border:none; padding:8px 16px;" onclick="runFly()">▶ Start Processing Job</button>
-                <span style="font-size:12px; color:#666;">(Stream YouTube -> Mux -> AssemblyAI/Deepgram)</span>
+            <div class="fly-form">
+                <div class="fly-row">
+                    <input id="fly-url" style="flex:2" placeholder="YouTube URL (https://...)" value="https://www.youtube.com/watch?v=ZNdVzOBga6k">
+                    <input id="fly-args" style="flex:3" placeholder="Extractor Args (po_token=...)" value='youtube:player_client=all;po_token=web.gvs+MlMQUj3TTz08aRBuqkQKUJI8sgaSz5WHWnAeQjJN7Jv-qhe-jZfl7VTihUv-RpMuTIpSK6hNhYf05Lt9IVFY-Gd4O1PI0miFlyOlU0zhdIr9Ac5aew=='>
+                </div>
+                <textarea id="fly-cookies" rows="4" placeholder="# Paste Netscape Cookies Content Here..."></textarea>
+                <button style="background:var(--acc); color:white; border:none; padding:8px;" onclick="runFly()">▶ Start Processing Job</button>
             </div>
-            <div id="fly-out">Click Start to begin streaming logs...</div>
+            <div id="fly-out">Ready. Paste cookies and click Start.</div>
         </div>
         
         <!-- STATS -->
@@ -388,10 +407,21 @@ def index():
     // --- TestFly Logic ---
     async function runFly() {{
         const out = document.getElementById('fly-out');
-        out.textContent = "Requesting job start...\\n";
+        const url = document.getElementById('fly-url').value;
+        const cookies = document.getElementById('fly-cookies').value;
+        const args = document.getElementById('fly-args').value;
+
+        if(!url) return alert("URL required");
+        
+        out.textContent = "Writing cookies and starting job...\\n";
         
         try {{
-            const response = await fetch('/api/fly');
+            const response = await fetch('/api/fly', {{
+                method: 'POST',
+                headers: {{'Content-Type': 'application/json'}},
+                body: JSON.stringify({{ url, cookies, args }})
+            }});
+            
             const reader = response.body.getReader();
             const decoder = new TextDecoder();
             

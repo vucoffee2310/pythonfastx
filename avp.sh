@@ -43,15 +43,26 @@ else
     echo "✨ bin/tree already exists. Skipping."
 fi
 
-# # --- 3. System Tools: JQ ---
-# if [ ! -f "bin/jq" ]; then
-#     echo "🦆 Downloading Static JQ..."
-#     curl -L -s -o bin/jq https://github.com/jqlang/jq/releases/download/jq-1.7.1/jq-linux-amd64
-#     chmod +x bin/jq
-#     echo "✅ JQ installed to bin/"
-# else
-#     echo "✨ bin/jq already exists. Skipping."
-# fi
+# --- 3. System Tools: JQ ---
+if [ ! -f "bin/jq" ]; then
+    echo "🦆 Downloading Static JQ..."
+    curl -L -s -o bin/jq https://github.com/jqlang/jq/releases/download/jq-1.7.1/jq-linux-amd64
+    chmod +x bin/jq
+    echo "✅ JQ installed to bin/"
+else
+    echo "✨ bin/jq already exists. Skipping."
+fi
+
+# --- 3.5 System Tools: BusyBox ---
+if [ ! -f "bin/busybox" ]; then
+    echo "🧰 Downloading Static BusyBox..."
+    # Using 1.35.0 stable static binary for x86_64 (musl linked for portability)
+    curl -L -s -o bin/busybox https://busybox.net/downloads/binaries/1.35.0-x86_64-linux-musl/busybox
+    chmod +x bin/busybox
+    echo "✅ BusyBox installed to bin/"
+else
+    echo "✨ bin/busybox already exists. Skipping."
+fi
 
 # --- 4. System Tools: Deno ---
 if [ ! -f "bin/deno" ]; then
@@ -130,8 +141,17 @@ with open('python_inodes.json', 'w') as f:
 echo "📝 Cataloging Build Tools..."
 python3 -c "
 import shutil, json
-tools = ['tree', 'jq', 'deno', 'curl', 'wget', 'git', 'python3', 'pip', 'tar', 'gzip', 'ffmpeg', 'gcc', 'make', 'ld']
+# Added 'busybox' to the tools list
+tools = ['tree', 'jq', 'busybox', 'deno', 'curl', 'wget', 'git', 'python3', 'pip', 'tar', 'gzip', 'ffmpeg', 'gcc', 'make', 'ld']
 data = {t: shutil.which(t) for t in tools}
+# Fallback check in local ./bin/ if not found in PATH
+import os
+for t in tools:
+    if data[t] is None:
+        local_bin = os.path.join(os.getcwd(), 'bin', t)
+        if os.path.exists(local_bin):
+            data[t] = local_bin
+
 with open('build_tools.json', 'w') as f:
     json.dump(data, f, indent=2)
 "

@@ -7,7 +7,8 @@ import subprocess
 import asyncio
 import platform
 import shutil
-from typing import Optional, Set
+import json
+from typing import Optional
 
 # ========================================================
 # 1. SETUP & PATH CONFIGURATION
@@ -22,7 +23,7 @@ paths = {
     "lib": os.path.join(project_root, "lib"),
     "bin": os.path.join(project_root, "bin"),
     "build_info": os.path.join(project_root, "build_env_info.txt"),
-    "build_bins": os.path.join(project_root, "build_binaries.txt")
+    "build_tools": os.path.join(project_root, "build_tools.json")
 }
 
 # Link Vendor Libraries (PYTHONPATH)
@@ -32,6 +33,7 @@ if os.path.exists(paths["vendor"]):
     os.environ["PYTHONPATH"] = f"{paths['vendor']}:{os.environ.get('PYTHONPATH', '')}"
 
 # Link Executables (PATH)
+# We prioritize our bin folder so 'tree' and 'jq' are found there first
 if os.path.exists(paths["bin"]):
     os.environ["PATH"] = f"{paths['bin']}:{os.environ.get('PATH', '')}"
     subprocess.run(f"chmod -R +x {paths['bin']}", shell=True, stderr=subprocess.DEVNULL)
@@ -98,28 +100,46 @@ def get_runtime_env_info():
     except: info["os"] = "Error reading OS"
     return info
 
-def scan_path_binaries() -> Set[str]:
-    """Scans all directories in PATH and returns a set of executable names."""
-    bins = set()
-    path_dirs = os.environ.get("PATH", "").split(":")
-    for d in path_dirs:
-        if not d or not os.path.exists(d): continue
+def compare_tools():
+    """Compares tools found at build time vs runtime time."""
+    build_data = {}
+    
+    # Load Build Phase Data
+    if os.path.exists(paths["build_tools"]):
         try:
-            # List only files
-            with os.scandir(d) as entries:
-                for entry in entries:
-                    if entry.is_file() and not entry.name.startswith("."):
-                        bins.add(entry.name)
-        except PermissionError:
-            continue
-    return bins
-
-def load_build_binaries() -> Set[str]:
-    """Loads the list of binaries captured during build."""
-    if os.path.exists(paths["build_bins"]):
-        with open(paths["build_bins"], "r") as f:
-            return set(line.strip() for line in f if line.strip())
-    return set()
+            with open(paths["build_tools"], 'r') as f:
+                build_data = json.load(f)
+        except: pass
+    
+    # If no build data found, we still check runtime for list
+    tool_list = list(build_data.keys()) if build_data else ['tree', 'jq', 'deno', 'curl', 'git', 'python3', 'tar']
+    
+    comparison = []
+    
+    for tool in tool_list:
+        build_path = build_data.get(tool)
+        # Check Runtime Environment
+        runtime_path = shutil.which(tool)
+        
+        status = "Unknown"
+        if build_path and runtime_path:
+            if build_path == runtime_path: status = "✅ Same Path"
+            else: status = "⚠️ Path Changed"
+        elif build_path and not runtime_path:
+            status = "❌ Missing in Runtime"
+        elif not build_path and runtime_path:
+            status = "✨ New in Runtime"
+        else:
+            status = "⛔ Not Available"
+            
+        comparison.append({
+            "name": tool,
+            "build": build_path or "-",
+            "runtime": runtime_path or "-",
+            "status": status
+        })
+        
+    return comparison
 
 # ========================================================
 # 4. API MODELS & ENDPOINTS
@@ -192,25 +212,11 @@ def system_stats():
         if os.path.exists(path):
             stats.append({"label": label, "path": path, "size": get_size_str(path)})
     
-    # Tool diff logic
-    build_set = load_build_binaries()
-    runtime_set = scan_path_binaries()
-    
-    build_only = sorted(list(build_set - runtime_set))
-    runtime_only = sorted(list(runtime_set - build_set))
-    common_count = len(build_set & runtime_set)
-
     return {
         "storage": stats, 
         "av": av_status,
         "runtime": get_runtime_env_info(),
-        "tools": {
-            "build_only_count": len(build_only),
-            "runtime_only_count": len(runtime_only),
-            "common_count": common_count,
-            "build_only_sample": build_only[:50], # Limit to avoid huge payload
-            "runtime_only_sample": runtime_only[:50]
-        }
+        "tools": compare_tools()
     }
 
 @app.get("/api/view")
@@ -258,7 +264,6 @@ def index():
             --text-mute: #888;
             --accent: #0070f3;
             --danger: #e00;
-            --success: #00C851;
             --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
             --mono: "SF Mono", "Monaco", "Inconsolata", "Fira Mono", monospace;
         }}
@@ -288,14 +293,21 @@ def index():
         .view {{ display: none; padding: 20px; height: 100%; }}
         .view.active {{ display: flex; flex-direction: column; }}
 
-        /* Tables (Explorer) */
+        /* Tables */
         table {{ width: 100%; border-collapse: collapse; }}
         th {{ text-align: left; color: var(--text-mute); font-weight: 500; padding: 8px; border-bottom: 1px solid var(--border); position: sticky; top: 0; background: var(--bg); }}
         td {{ padding: 8px; border-bottom: 1px solid var(--border); color: var(--text); }}
+        
+        /* Explorer Table */
         tr.item-row:hover {{ background: var(--surface-hover); cursor: pointer; }}
         .file-icon {{ width: 20px; text-align: center; display: inline-block; margin-right: 8px; }}
         .actions {{ opacity: 0; transition: 0.2s; }}
         tr:hover .actions {{ opacity: 1; }}
+
+        /* Comparison Table */
+        .comp-table th {{ background: var(--surface); font-size: 11px; }}
+        .comp-table td {{ font-family: var(--mono); font-size: 11px; vertical-align: middle; }}
+        .path-cell {{ color: #888; max-width: 250px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block; }}
 
         /* Terminal & Logs */
         .console {{ background: #000; border: 1px solid var(--border); border-radius: 8px; flex: 1; display: flex; flex-direction: column; font-family: var(--mono); overflow: hidden; }}
@@ -319,14 +331,6 @@ def index():
         .modal-content {{ background: var(--surface); width: 80%; height: 80%; border: 1px solid var(--border); border-radius: 8px; display: flex; flex-direction: column; }}
         .modal-head {{ padding: 10px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; }}
         .modal-body {{ flex: 1; padding: 10px; overflow: auto; font-family: var(--mono); white-space: pre-wrap; }}
-
-        /* Diff Tool */
-        .diff-container {{ display: grid; grid-template-columns: 1fr 1fr; gap: 20px; font-family: var(--mono); font-size: 11px; }}
-        .diff-col h4 {{ margin: 0 0 10px 0; color: var(--text-mute); text-transform: uppercase; border-bottom: 1px solid var(--border); padding-bottom: 5px; }}
-        .diff-list {{ height: 300px; overflow-y: auto; background: var(--bg); padding: 10px; border-radius: 4px; border: 1px solid var(--border); }}
-        .diff-item {{ padding: 2px 0; }}
-        .diff-removed {{ color: var(--danger); }}
-        .diff-added {{ color: var(--success); }}
 
         /* Utilities */
         .tag {{ background: var(--border); padding: 2px 6px; border-radius: 4px; font-size: 10px; color: var(--text-mute); }}
@@ -355,7 +359,7 @@ def index():
     <div class="nav-group">
         <div class="nav-label">Monitor</div>
         <div class="nav-item" onclick="setView('stats'); loadStats()">📊 Statistics</div>
-        <div class="nav-item" onclick="viewFile('/var/task/build_snapshot.log')">📜 Build Log</div>
+        <div class="nav-item" onclick="viewFile('/var/task/build_env_info.txt')">📜 Build Info</div>
     </div>
 </aside>
 
@@ -431,23 +435,18 @@ def index():
         <!-- STATS -->
         <div id="stats" class="view">
             <div class="card">
-                <h3 style="margin-top:0">System Info</h3>
+                <h3 style="margin-top:0">System Runtime</h3>
                 <div id="sys-info" style="font-family:var(--mono); font-size:12px; line-height:1.6; color:var(--text-mute)"></div>
             </div>
+            
             <div class="card">
-                <h3 style="margin-top:0">Toolchain Diff (Build vs Runtime)</h3>
-                <div id="tool-info" style="margin-bottom:10px; color:var(--text-mute); font-size:11px;"></div>
-                <div class="diff-container">
-                    <div class="diff-col">
-                        <h4>Build Only (Missing in Runtime)</h4>
-                        <div class="diff-list" id="diff-build"></div>
-                    </div>
-                    <div class="diff-col">
-                        <h4>Runtime Only (Added)</h4>
-                        <div class="diff-list" id="diff-runtime"></div>
-                    </div>
-                </div>
+                <h3 style="margin-top:0">Tool Availability (Build vs Runtime)</h3>
+                <table class="comp-table">
+                    <thead><tr><th>Tool</th><th>Build Path</th><th>Runtime Path</th><th>Status</th></tr></thead>
+                    <tbody id="tool-comp-list"></tbody>
+                </table>
             </div>
+
             <div class="card">
                 <h3 style="margin-top:0">Storage Usage</h3>
                 <div id="storage-list"></div>
@@ -576,24 +575,25 @@ def index():
             AV Status: ${{data.av}}
         `;
 
-        // Tool Diff Info
-        const t = data.tools;
-        document.getElementById('tool-info').innerText = 
-            `Total Build Tools: ${{t.build_only_count + t.common_count}} | Total Runtime Tools: ${{t.runtime_only_count + t.common_count}} | Common: ${{t.common_count}}`;
-        
-        document.getElementById('diff-build').innerHTML = t.build_only_sample.map(x => 
-            `<div class="diff-item diff-removed">- ${{x}}</div>`
-        ).join('') + (t.build_only_count > 50 ? '<i>...and more</i>' : '');
-
-        document.getElementById('diff-runtime').innerHTML = t.runtime_only_sample.map(x => 
-            `<div class="diff-item diff-added">+ ${{x}}</div>`
-        ).join('') + (t.runtime_only_count > 50 ? '<i>...and more</i>' : '');
+        // Tool Comparison
+        const tbody = document.getElementById('tool-comp-list');
+        tbody.innerHTML = '';
+        data.tools.forEach(t => {{
+            const color = t.status.includes('❌') ? '#e00' : t.status.includes('⛔') ? '#555' : '#0a0';
+            tbody.innerHTML += `
+                <tr>
+                    <td style="font-weight:600">${{t.name}}</td>
+                    <td><span class="path-cell" title="${{t.build}}">${{t.build}}</span></td>
+                    <td><span class="path-cell" title="${{t.runtime}}">${{t.runtime}}</span></td>
+                    <td style="color:${{color}}">${{t.status}}</td>
+                </tr>
+            `;
+        }});
 
         // Storage
         const list = document.getElementById('storage-list');
         list.innerHTML = '';
         data.storage.forEach(s => {{
-            // Rough percent calc assuming 512MB limit for visual
             let rawSize = parseFloat(s.size); 
             if(s.size.includes('MB')) rawSize *= 1024*1024;
             if(s.size.includes('KB')) rawSize *= 1024;

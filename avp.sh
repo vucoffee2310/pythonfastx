@@ -113,56 +113,51 @@ with open('build_tools.json', 'w') as f:
     json.dump(data, f, indent=2)
 "
 
-echo "📸 Snapshotting Build File System Structure..."
+echo "📸 Snapshotting FULL Build File System (excluding virtual paths)..."
 python3 -c "
 import os
 
-# Output Format: TYPE|SIZE|PATH
-# D = Directory, F = File
 index_file = 'build_fs.index'
 
-def scan_dir(start_path, max_depth=None, current_depth=0):
-    entries = []
-    try:
-        with os.scandir(start_path) as it:
-            for entry in it:
-                try:
-                    is_dir = entry.is_dir()
-                    size = entry.stat().st_size if not is_dir else 0
-                    entries.append(( 'D' if is_dir else 'F', size, entry.path ))
-                    
-                    if is_dir:
-                        # Recurse if no limit or within limit
-                        if max_depth is None or current_depth < max_depth:
-                            entries.extend(scan_dir(entry.path, max_depth, current_depth + 1))
-                except:
-                    pass
-    except:
-        pass
-    return entries
+# Skip virtual filesystems that cause hangs or infinite loops
+SKIP_DIRS = {'/proc', '/sys', '/dev', '/run', '/tmp', '/var/run', '/var/cache'}
 
+def should_skip(path):
+    # Check strict match or prefix
+    for s in SKIP_DIRS:
+        if path == s or path.startswith(s + '/'):
+            return True
+    return False
+
+count = 0
 with open(index_file, 'w', encoding='utf-8') as f:
-    cwd = os.getcwd()
-    
-    # 1. Full Snapshot of Workspace (Current Directory)
-    # We add the root entry first
-    f.write(f'D|0|{cwd}\n')
-    for item in scan_dir(cwd):
-        f.write(f'{item[0]}|{item[1]}|{item[2]}\n')
+    # Walk from root
+    for root, dirs, files in os.walk('/'):
+        # Filter directories in-place to prevent traversing skipped paths
+        dirs[:] = [d for d in dirs if not should_skip(os.path.join(root, d))]
+        
+        # Log directory entries
+        for name in dirs:
+            path = os.path.join(root, name)
+            f.write(f'D|0|{path}\n')
+            count += 1
+            
+        # Log file entries
+        for name in files:
+            path = os.path.join(root, name)
+            if should_skip(path): continue
+            
+            try:
+                # Use lstat to avoid following symlinks into void
+                stat = os.lstat(path)
+                size = stat.st_size
+                f.write(f'F|{size}|{path}\n')
+                count += 1
+            except:
+                # Permission denied or disappeared
+                f.write(f'F|0|{path}\n')
 
-    # 2. Shallow Snapshot of System Roots
-    # We want to see what's in /bin, /usr/bin, /lib without timing out scanning the whole drive
-    sys_roots = ['/', '/bin', '/usr', '/lib', '/lib64', '/opt', '/etc']
-    
-    for root in sys_roots:
-        if os.path.exists(root):
-            # Write the root itself
-            f.write(f'D|0|{root}\n')
-            # Scan with depth limit of 2 (enough to see /usr/bin/python but not deep libs)
-            for item in scan_dir(root, max_depth=2):
-                f.write(f'{item[0]}|{item[1]}|{item[2]}\n')
-
-print(f'✅ Snapshot saved to {index_file}')
+print(f'✅ Full Snapshot Complete: {count} entries saved to {index_file}')
 "
 
 echo "✅ Build Process Complete"

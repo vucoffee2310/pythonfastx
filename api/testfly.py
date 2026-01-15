@@ -12,20 +12,20 @@ from concurrent.futures import ThreadPoolExecutor
 try:
     import av
 except ImportError:
-    pass # Main.py handles the path injection
+    pass 
 
-# --- 1. CONFIGURATION ---
+# --- CONFIGURATION ---
 @dataclass(frozen=True)
 class Config:
     PROVIDER: str = "assemblyai"
-    # Note: In production, use os.environ.get()
+    # In production, use os.environ.get("DEEPGRAM_KEY")
     DEEPGRAM_KEY: str = "d6bf3bf38250b6370e424a0805f6ef915ae00bec"
     DEEPGRAM_URL: str = "https://manage.deepgram.com/storage/assets"
     ASSEMBLYAI_KEY: str = "193053bc6ff84ba9aac2465506f47d48"
     ASSEMBLYAI_URL: str = "https://api.assemblyai.com/v2/upload"
     
     TARGET_URL: str = "https://www.youtube.com/watch?v=cz0ReLDliV8"
-    COOKIE_FILE: str = "/tmp/cookies.txt" # Changed from /dev/shm for Vercel compat
+    COOKIE_FILE: str = "/tmp/cookies.txt" # Vercel writable path
     
     CHUNK_DURATION: int = 1800
     BUFFER_TAIL: int = 600
@@ -88,8 +88,6 @@ def create_package(packets: List, input_stream, max_dur: float, fmt: str):
 
 # --- PACKAGER ---
 def run_packager(loop: asyncio.AbstractEventLoop, conveyor_belt: asyncio.Queue, log_q: asyncio.Queue):
-    # Ensure cookie file exists or is handled. Vercel /tmp is empty on start.
-    # For this demo, we might skip cookies or need to write a dummy one.
     cmd = [
         "yt-dlp", "-f", "ba", "-S", "+abr,+tbr,+size",
         "--http-chunk-size", "10M",

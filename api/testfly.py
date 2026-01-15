@@ -51,21 +51,21 @@ def miner_log_monitor(pipe, q):
     """Reads raw stderr from yt-dlp and pushes to queue."""
     for line in iter(pipe.readline, b""):
         text = line.decode("utf-8", errors="ignore")
-        # Filter out extremely verbose/noisy lines if needed
         if "[download]" in text:
-            # Shorten the progress log
+            # Clean up progress bar logs
             text = text.replace("[download]", "[MINER] ⛏️ ").strip()
         elif "[youtube]" in text:
             text = text.replace("[youtube]", "[MINER] 🔎 ")
         elif "[info]" in text:
             text = text.replace("[info]", "[MINER] ℹ️ ")
-        
         log(q, text.strip())
 
 # --- CPU BOUND ---
 def create_package(packets: List, input_stream, max_dur: float, fmt: str):
     output_mem = io.BytesIO()
-    with av.open(output_mem, mode="w", format=fmt) as container:
+    
+    # CRITICAL FIX: Pass 'strict': 'experimental' to allow Opus/Vorbis if FFmpeg deems them experimental
+    with av.open(output_mem, mode="w", format=fmt, options={'strict': 'experimental'}) as container:
         stream = container.add_stream(input_stream.codec_context.name)
         stream.time_base = input_stream.time_base
         if input_stream.codec_context.extradata:
@@ -116,7 +116,7 @@ def run_packager(loop: asyncio.AbstractEventLoop, conveyor_belt: asyncio.Queue, 
     # 3. Build Command
     cmd = [
         sys.executable, "-m", "yt_dlp", 
-        "--newline",  # <--- CRITICAL: Forces real-time logging
+        "--newline",
         "-f", "ba", 
         "-S", "+abr,+tbr,+size",
         "--http-chunk-size", chunk_size,
@@ -141,7 +141,6 @@ def run_packager(loop: asyncio.AbstractEventLoop, conveyor_belt: asyncio.Queue, 
     log(log_q, "[PACKAGER] ⏳ Waiting for stream data...")
 
     try:
-        # Open PyAV on the stdout pipe
         in_container = av.open(process.stdout, mode="r")
         in_stream = in_container.streams.audio[0]
         codec = in_stream.codec_context.name

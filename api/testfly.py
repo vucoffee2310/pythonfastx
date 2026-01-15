@@ -5,6 +5,7 @@ import subprocess
 import aiohttp
 import threading
 import os
+import time
 from typing import NamedTuple, List, Optional
 from dataclasses import dataclass
 from concurrent.futures import ThreadPoolExecutor
@@ -48,23 +49,37 @@ def log(q: asyncio.Queue, msg: str):
     if q: q.put_nowait(msg + "\n")
 
 def miner_log_monitor(pipe, q):
-    """Reads raw stderr from yt-dlp and pushes to queue."""
+    """Reads raw stderr from yt-dlp, filters spam, and pushes to queue."""
+    last_progress_time = 0.0
+    
     for line in iter(pipe.readline, b""):
-        text = line.decode("utf-8", errors="ignore")
+        text = line.decode("utf-8", errors="ignore").strip()
+        
+        if not text: continue
+
         if "[download]" in text:
-            # Clean up progress bar logs
-            text = text.replace("[download]", "[MINER] ⛏️ ").strip()
+            # Clean up the tag
+            clean_text = text.replace("[download]", "[MINER] ⛏️ ").strip()
+            
+            # Rate Limit: Only log progress every 0.5 seconds to prevent spam
+            now = time.time()
+            if (now - last_progress_time) > 0.5:
+                log(q, clean_text)
+                last_progress_time = now
+                
         elif "[youtube]" in text:
-            text = text.replace("[youtube]", "[MINER] 🔎 ")
+            log(q, text.replace("[youtube]", "[MINER] 🔎 "))
         elif "[info]" in text:
-            text = text.replace("[info]", "[MINER] ℹ️ ")
-        log(q, text.strip())
+            log(q, text.replace("[info]", "[MINER] ℹ️ "))
+        else:
+            # Pass through other logs (errors, warnings, etc.) immediately
+            log(q, text)
 
 # --- CPU BOUND ---
 def create_package(packets: List, input_stream, max_dur: float, fmt: str):
     output_mem = io.BytesIO()
     
-    # CRITICAL FIX: Pass 'strict': 'experimental' to allow Opus/Vorbis if FFmpeg deems them experimental
+    # Using strict='experimental' to allow Opus/Vorbis in containers that consider it experimental
     with av.open(output_mem, mode="w", format=fmt, options={'strict': 'experimental'}) as container:
         stream = container.add_stream(input_stream.codec_context.name)
         stream.time_base = input_stream.time_base

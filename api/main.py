@@ -7,7 +7,8 @@ import subprocess
 import asyncio
 import platform
 import shutil
-from typing import Optional
+import json
+from typing import Optional, List, Set
 
 # ========================================================
 # 1. SETUP & PATH CONFIGURATION
@@ -21,7 +22,7 @@ paths = {
     "vendor": os.path.join(project_root, "_vendor"),
     "lib": os.path.join(project_root, "lib"),
     "bin": os.path.join(project_root, "bin"),
-    "build_info": os.path.join(project_root, "build_env_info.txt")
+    "build_audit": os.path.join(project_root, "build_phase_tools.json")
 }
 
 # Link Vendor Libraries (PYTHONPATH)
@@ -64,11 +65,9 @@ def get_size_str(path):
     """Returns human readable file/dir size."""
     total = 0
     try:
-        # Fast path for Linux/Unix
         res = subprocess.run(["du", "-sb", path], stdout=subprocess.PIPE, text=True)
         total = int(res.stdout.split()[0])
     except:
-        # Fallback for other envs
         if os.path.isfile(path):
             total = os.path.getsize(path)
         else:
@@ -82,20 +81,19 @@ def get_size_str(path):
         total /= 1024
     return f"{total:.2f} TB"
 
-def get_runtime_env_info():
-    info = {
-        "python": sys.version.split()[0],
-        "platform": platform.platform(),
-        "glibc": platform.libc_ver()[1]
-    }
-    try:
-        if os.path.exists("/etc/os-release"):
-            with open("/etc/os-release") as f:
-                info["os"] = f.read().splitlines()[0].replace('"', '')
-        else:
-            info["os"] = "Unknown OS"
-    except: info["os"] = "Error reading OS"
-    return info
+def scan_executables() -> List[str]:
+    """Scans current PATH for all executable files."""
+    tools = set()
+    env_paths = os.environ.get("PATH", "").split(os.pathsep)
+    for p in env_paths:
+        if not os.path.exists(p): continue
+        try:
+            for f in os.listdir(p):
+                full_path = os.path.join(p, f)
+                if os.path.isfile(full_path) and os.access(full_path, os.X_OK):
+                    tools.add(f)
+        except: pass
+    return sorted(list(tools))
 
 # ========================================================
 # 4. API MODELS & ENDPOINTS
@@ -155,6 +153,42 @@ def run_shell(cmd: str):
     except subprocess.TimeoutExpired: return {"out": "⚠️ Command timed out."}
     except Exception as e: return {"out": str(e)}
 
+@app.get("/api/audit")
+def audit_tools():
+    """Compares Build-time tools vs Runtime tools."""
+    
+    # 1. Load Build Snapshot
+    build_tools = []
+    if os.path.exists(paths["build_audit"]):
+        try:
+            with open(paths["build_audit"], "r") as f:
+                data = json.load(f)
+                build_tools = data.get("tools", [])
+        except: pass
+    
+    # 2. Scan Runtime
+    runtime_tools = scan_executables()
+    
+    # 3. Compare
+    set_build = set(build_tools)
+    set_runtime = set(runtime_tools)
+    
+    missing_at_runtime = sorted(list(set_build - set_runtime))
+    new_at_runtime = sorted(list(set_runtime - set_build))
+    common = sorted(list(set_build.intersection(set_runtime)))
+    
+    return {
+        "summary": {
+            "build_total": len(set_build),
+            "runtime_total": len(set_runtime),
+            "missing_count": len(missing_at_runtime),
+            "added_count": len(new_at_runtime)
+        },
+        "missing_at_runtime": missing_at_runtime, # Available in Build, GONE in Runtime
+        "new_at_runtime": new_at_runtime,         # Not in Build, PRESENT in Runtime
+        "common_sample": common[:20]              # Sample of shared tools
+    }
+
 @app.get("/api/stats")
 def system_stats():
     stats = []
@@ -168,10 +202,21 @@ def system_stats():
         if os.path.exists(path):
             stats.append({"label": label, "path": path, "size": get_size_str(path)})
     
+    env_info = {
+        "python": sys.version.split()[0],
+        "platform": platform.platform(),
+        "glibc": platform.libc_ver()[1]
+    }
+    
+    # Read build metadata if exists
+    if os.path.exists(paths["build_info"]):
+        with open(paths["build_info"]) as f:
+            env_info["build_meta"] = f.read()
+
     return {
         "storage": stats, 
         "av": av_status,
-        "runtime": get_runtime_env_info()
+        "runtime": env_info
     }
 
 @app.get("/api/view")
@@ -219,6 +264,8 @@ def index():
             --text-mute: #888;
             --accent: #0070f3;
             --danger: #e00;
+            --success: #00cc66;
+            --warn: #ffaa00;
             --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
             --mono: "SF Mono", "Monaco", "Inconsolata", "Fira Mono", monospace;
         }}
@@ -263,16 +310,26 @@ def index():
         .input-line {{ display: flex; border-top: 1px solid var(--border); }}
         .input-line input {{ flex: 1; background: transparent; border: none; color: white; padding: 10px; font-family: inherit; }}
 
-        /* Forms (Fly) */
+        /* Forms */
         .card {{ background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 20px; margin-bottom: 20px; }}
         .form-grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 15px; }}
         .full-width {{ grid-column: 1 / -1; }}
         label {{ display: block; color: var(--text-mute); font-size: 11px; margin-bottom: 6px; font-weight: 600; }}
         input, textarea {{ width: 100%; background: var(--bg); border: 1px solid var(--border); color: white; padding: 8px; border-radius: 4px; font-family: var(--mono); font-size: 12px; }}
-        input:focus, textarea:focus {{ border-color: var(--accent); }}
+        input:focus {{ border-color: var(--accent); }}
         .btn {{ background: var(--text); color: black; border: none; padding: 8px 16px; border-radius: 4px; font-weight: 600; cursor: pointer; }}
         .btn:hover {{ opacity: 0.9; }}
         .btn-primary {{ background: var(--accent); color: white; width: 100%; padding: 10px; margin-top: 10px; }}
+
+        /* Audit Grid */
+        .audit-cols {{ display: grid; grid-template-columns: 1fr 1fr; gap: 20px; height: 100%; }}
+        .audit-col {{ display: flex; flex-direction: column; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }}
+        .audit-head {{ padding: 10px; background: rgba(255,255,255,0.05); border-bottom: 1px solid var(--border); font-weight: bold; text-align: center; }}
+        .audit-list {{ flex: 1; overflow-y: auto; padding: 10px; font-family: var(--mono); font-size: 11px; }}
+        .tool-item {{ padding: 2px 0; border-bottom: 1px solid #222; }}
+        .badge {{ display: inline-block; padding: 2px 6px; border-radius: 4px; font-size: 10px; margin-left: 5px; }}
+        .bg-red {{ background: rgba(255,0,0,0.2); color: #ff6666; }}
+        .bg-green {{ background: rgba(0,255,0,0.2); color: #66ff66; }}
 
         /* Modal */
         .modal {{ position: fixed; inset: 0; background: rgba(0,0,0,0.8); display: none; align-items: center; justify-content: center; z-index: 100; }}
@@ -280,10 +337,9 @@ def index():
         .modal-head {{ padding: 10px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; }}
         .modal-body {{ flex: 1; padding: 10px; overflow: auto; font-family: var(--mono); white-space: pre-wrap; }}
 
-        /* Utilities */
-        .tag {{ background: var(--border); padding: 2px 6px; border-radius: 4px; font-size: 10px; color: var(--text-mute); }}
         .stat-bar {{ height: 4px; background: var(--border); border-radius: 2px; margin-top: 5px; overflow: hidden; }}
         .stat-fill {{ height: 100%; background: var(--accent); }}
+        .tag {{ background: var(--border); padding: 2px 6px; border-radius: 4px; font-size: 10px; color: var(--text-mute); }}
     </style>
 </head>
 <body>
@@ -301,13 +357,14 @@ def index():
     <div class="nav-group">
         <div class="nav-label">Tools</div>
         <div class="nav-item" onclick="setView('terminal')">💻 Terminal</div>
+        <div class="nav-item" onclick="setView('audit'); runAudit()">🕵️ Tool Audit</div>
         <div class="nav-item" onclick="setView('fly')">🚀 TestFly Job</div>
     </div>
 
     <div class="nav-group">
         <div class="nav-label">Monitor</div>
         <div class="nav-item" onclick="setView('stats'); loadStats()">📊 Statistics</div>
-        <div class="nav-item" onclick="viewFile('/var/task/build_snapshot.log')">📜 Build Log</div>
+        <div class="nav-item" onclick="viewFile('/var/task/build_env_info.txt')">📜 Build Meta</div>
     </div>
 </aside>
 
@@ -334,6 +391,24 @@ def index():
                 <div class="input-line">
                     <span style="padding:10px;color:var(--accent)">$</span>
                     <input id="term-in" autocomplete="off" autofocus>
+                </div>
+            </div>
+        </div>
+
+        <!-- AUDIT -->
+        <div id="audit" class="view">
+            <div class="card">
+                <h3 style="margin-top:0">Environment Difference Report</h3>
+                <div id="audit-summary" style="display:flex; gap:20px; font-size:12px; color:var(--text-mute)">Loading...</div>
+            </div>
+            <div class="audit-cols">
+                <div class="audit-col" style="border-color: #522">
+                    <div class="audit-head" style="color:#ff8888">❌ Build Only (Missing Now)</div>
+                    <div class="audit-list" id="list-missing"></div>
+                </div>
+                <div class="audit-col" style="border-color: #252">
+                    <div class="audit-head" style="color:#88ff88">✅ Runtime Only (New)</div>
+                    <div class="audit-list" id="list-new"></div>
                 </div>
             </div>
         </div>
@@ -412,8 +487,7 @@ def index():
         document.querySelectorAll('.view').forEach(el => el.classList.remove('active'));
         document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
         document.getElementById(id).classList.add('active');
-        // Simple highlight logic
-        const navMap = {{'explorer':0, 'terminal':3, 'fly':4, 'stats':5}};
+        const navMap = {{'explorer':0, 'terminal':3, 'audit':4, 'fly':5, 'stats':6}};
         if(navMap[id] !== undefined) document.querySelectorAll('.nav-item')[navMap[id]].classList.add('active');
     }}
 
@@ -422,21 +496,17 @@ def index():
         document.getElementById('addr').value = path;
         const tbody = document.getElementById('file-list');
         tbody.innerHTML = '<tr><td colspan="4" style="padding:20px;text-align:center;color:#666">Loading...</td></tr>';
-        
         try {{
             const res = await fetch(`/api/list?path=${{encodeURIComponent(path)}}`);
             if(!res.ok) throw await res.text();
             const data = await res.json();
-            
             tbody.innerHTML = '';
             data.items.forEach(item => {{
                 const tr = document.createElement('tr');
                 tr.className = 'item-row';
                 const icon = item.is_dir ? '📁' : '📄';
-                const action = item.is_dir ? 
-                    '' : 
+                const action = item.is_dir ? '' : 
                     `<a href="/api/download?path=${{encodeURIComponent(item.path)}}" style="color:var(--accent);text-decoration:none;margin-right:10px">⬇</a>`;
-                
                 tr.innerHTML = `
                     <td style="padding-left:16px"><span class="file-icon">${{icon}}</span> ${{item.name}}</td>
                     <td style="font-family:var(--mono);font-size:11px;color:#888">${{item.size}}</td>
@@ -444,8 +514,7 @@ def index():
                     <td class="actions">
                         ${{action}}
                         <span onclick="del(event, '${{item.path}}')" style="color:var(--danger);cursor:pointer">✕</span>
-                    </td>
-                `;
+                    </td>`;
                 tr.onclick = (e) => {{
                     if(e.target.tagName === 'A' || e.target.tagName === 'SPAN') return;
                     item.is_dir ? nav(item.path) : viewFile(item.path);
@@ -473,9 +542,7 @@ def index():
         document.getElementById('modal-text').innerText = data.content || data.error;
         document.getElementById('file-modal').style.display = 'flex';
     }}
-
     function closeModal() {{ document.getElementById('file-modal').style.display = 'none'; }}
-    
     async function del(e, path) {{
         e.stopPropagation();
         if(!confirm(`Delete ${{path}}?`)) return;
@@ -486,14 +553,12 @@ def index():
     // --- Terminal ---
     const termIn = document.getElementById('term-in');
     const termOut = document.getElementById('term-out');
-    
     termIn.addEventListener('keypress', async (e) => {{
         if(e.key === 'Enter') {{
             const cmd = termIn.value;
             termIn.value = '';
             termOut.innerText += `\\n$ ${{cmd}}`;
             if(cmd === 'clear') {{ termOut.innerText = ''; return; }}
-            
             const res = await fetch(`/api/shell?cmd=${{encodeURIComponent(cmd)}}`);
             const data = await res.json();
             termOut.innerText += `\\n${{data.out}}`;
@@ -505,36 +570,55 @@ def index():
     async function loadStats() {{
         const res = await fetch('/api/stats');
         const data = await res.json();
-        
-        // System Info
         const info = data.runtime;
         document.getElementById('sys-info').innerHTML = `
             OS: ${{info.os}} (${{info.platform}})<br>
             Python: ${{info.python}} | Glibc: ${{info.glibc}}<br>
             AV Status: ${{data.av}}
         `;
-
-        // Storage
         const list = document.getElementById('storage-list');
         list.innerHTML = '';
         data.storage.forEach(s => {{
-            // Rough percent calc assuming 512MB limit for visual
             let rawSize = parseFloat(s.size); 
             if(s.size.includes('MB')) rawSize *= 1024*1024;
             if(s.size.includes('KB')) rawSize *= 1024;
             const pct = Math.min(100, (rawSize / (500*1024*1024)) * 100);
-            
             list.innerHTML += `
                 <div style="margin-bottom:12px">
                     <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px">
-                        <b>${{s.label}}</b>
-                        <span style="font-family:var(--mono)">${{s.size}}</span>
+                        <b>${{s.label}}</b><span style="font-family:var(--mono)">${{s.size}}</span>
                     </div>
                     <div style="font-size:10px;color:#666">${{s.path}}</div>
                     <div class="stat-bar"><div class="stat-fill" style="width:${{pct}}%"></div></div>
-                </div>
-            `;
+                </div>`;
         }});
+    }}
+
+    // --- Audit ---
+    async function runAudit() {{
+        document.getElementById('audit-summary').innerText = "Comparing environments...";
+        document.getElementById('list-missing').innerHTML = "";
+        document.getElementById('list-new').innerHTML = "";
+
+        const res = await fetch('/api/audit');
+        const data = await res.json();
+
+        document.getElementById('audit-summary').innerHTML = `
+            <div>Build Total: <b style="color:white">${{data.summary.build_total}}</b></div>
+            <div>Runtime Total: <b style="color:white">${{data.summary.runtime_total}}</b></div>
+            <div>Overlap: <b style="color:white">${{data.summary.runtime_total - data.summary.added_count}}</b></div>
+        `;
+
+        const renderList = (elId, items, colorClass) => {{
+            const el = document.getElementById(elId);
+            if(items.length === 0) el.innerHTML = '<div style="color:#555;padding:10px">No differences found.</div>';
+            else items.forEach(t => {{
+                el.innerHTML += `<div class="tool-item">${{t}}</div>`;
+            }});
+        }};
+
+        renderList('list-missing', data.missing_at_runtime, 'bg-red');
+        renderList('list-new', data.new_at_runtime, 'bg-green');
     }}
 
     // --- TestFly ---
@@ -549,22 +633,17 @@ def index():
             player_clients: document.getElementById('fly-clients').value,
             po_token: document.getElementById('fly-token').value
         }};
-        
         if(!payload.url) return alert("URL is required");
-        
         out.innerText = "🚀 Job Started...\\n";
-        setView('fly'); // Ensure view is active
-        
+        setView('fly');
         try {{
             const res = await fetch('/api/fly', {{
                 method: 'POST',
                 headers: {{'Content-Type': 'application/json'}},
                 body: JSON.stringify(payload)
             }});
-            
             const reader = res.body.getReader();
             const decoder = new TextDecoder();
-            
             while(true) {{
                 const {{value, done}} = await reader.read();
                 if(done) break;
@@ -573,14 +652,10 @@ def index():
                 out.scrollTop = out.scrollHeight;
             }}
             out.innerText += "\\n✅ Stream Closed.";
-        }} catch(e) {{
-            out.innerText += `\\n❌ Error: ${{e}}`;
-        }}
+        }} catch(e) {{ out.innerText += `\\n❌ Error: ${{e}}`; }}
     }}
 
-    // Init
     nav(currentPath);
 </script>
 </body>
 </html>
-    """

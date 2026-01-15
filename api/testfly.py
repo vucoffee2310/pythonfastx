@@ -100,9 +100,11 @@ def run_packager(loop: asyncio.AbstractEventLoop, conveyor_belt: asyncio.Queue, 
             log(log_q, f"[ERROR] Failed to write cookies: {e}")
 
     # 2. Build Command
-    # Default Args similar to user request
+    # CRITICAL FIX: Use sys.executable -m yt_dlp instead of just "yt-dlp"
     cmd = [
-        "yt-dlp", "-f", "ba", "-S", "+abr,+tbr,+size",
+        sys.executable, "-m", "yt_dlp", 
+        "-f", "ba", 
+        "-S", "+abr,+tbr,+size",
         "--http-chunk-size", "8M",
         "--limit-rate", "4M",
         "-o", "-",
@@ -125,6 +127,7 @@ def run_packager(loop: asyncio.AbstractEventLoop, conveyor_belt: asyncio.Queue, 
     log(log_q, f"[PACKAGER] 🏭 Starting: {target_url}")
     # log(log_q, f"[CMD] {' '.join(cmd)}") # Debug command
     
+    # Run process
     process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     
     log_thread = threading.Thread(target=miner_log_monitor, args=(process.stderr, log_q))

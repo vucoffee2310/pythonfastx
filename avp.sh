@@ -8,8 +8,6 @@ echo "----------------------------------------"
 # ========================================================
 # 0. CAPTURE BUILD ENVIRONMENT INFO
 # ========================================================
-# We save this to a file so the Python app can read it 
-# at runtime to show you what the build server looked like.
 echo "🔍 Capturing Build Environment Metadata..."
 {
   echo "=== BUILD DATE ==="
@@ -28,60 +26,35 @@ echo "🔍 Capturing Build Environment Metadata..."
 # ========================================================
 # 1. PREPARE LOCAL BIN FOLDER
 # ========================================================
-# We must create a local 'bin' directory. Vercel will include this 
-# in the deployment, unlike files installed to /usr/bin.
+# Vercel includes this folder in the deployment bundle.
 mkdir -p bin
 
 # 2. INSTALL TREE (Install via yum, then grab the binary)
 if command -v yum &> /dev/null; then
     echo "🌲 Installing Tree via yum..."
     yum install -y tree
-    # CRITICAL: Copy the binary from system path to project path
     cp $(which tree) bin/
 else
     echo "⚠️  Yum not found, skipping tree system install."
 fi
 
 # 3. INSTALL JQ (Download Static Binary)
-# We download the static binary because the 'yum' version often depends 
-# on libraries (libonig) that won't exist in the runtime.
 echo "🦆 Downloading Static JQ..."
 curl -L -o bin/jq https://github.com/jqlang/jq/releases/download/jq-1.7.1/jq-linux-amd64
 chmod +x bin/jq
 
-echo "✅ System tools copied to ./bin/"
+# 4. INSTALL DENO (Required for yt-dlp signature/PO Token)
+echo "🦕 Installing Deno..."
+# Standard Deno install script
+curl -fsSL https://deno.land/install.sh | sh
 
-# 4. INSTALL PYTHON DEPS
-echo "📦 Installing Python requirements..."
-pip install fastapi uvicorn yt-dlp[default] aiohttp
-
-# 5. DOWNLOAD CUSTOM AV
-echo "⬇️  Downloading Custom AV Zip..."
-curl -L -o av_custom.zip "https://github.com/vucoffee2310/Collection/releases/download/ffmpeg-audio/av-16.1.0-cp311-abi3-manylinux_2_17_x86_64.zip"
-
-# 6. UNZIP
-echo "📂 Unzipping..."
-unzip -o av_custom.zip
-
-# 7. INSTALL WHEEL
-echo "💿 Installing Custom Wheel..."
-pip install *.whl
-
-# 8. CLEANUP ARCHIVES AND WHEELS
-echo "🧹 Removing extracted files and archives..."
-rm -f av_custom.zip
-rm -f *.whl
-
-# 9. INSTALL PROJECT REQUIREMENTS
-if [ -f requirements.txt ]; then
-    echo "📦 Installing requirements.txt..."
-    pip install -r requirements.txt
-fi
-
-echo "----------------------------------------"
-echo "📊 Final Verification"
-echo "Directory structure (bin folder check):"
-# We use the local tree command we just installed to verify it works immediately
-./bin/tree -L 2
-
-echo "✅ Build Complete & Workspace Cleaned"
+# Move Deno from default home loc to our project bin
+echo "🚚 Moving Deno binary to ./bin/..."
+if [ -f "$HOME/.deno/bin/deno" ]; then
+    cp "$HOME/.deno/bin/deno" bin/
+    chmod +x bin/deno
+    # Clean up to save space in the lambda slug
+    rm -rf "$HOME/.deno"
+    echo "✅ Deno installed successfully."
+else
+    echo "❌ Error: Deno binary not found after install s

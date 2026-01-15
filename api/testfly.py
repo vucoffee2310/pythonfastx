@@ -90,17 +90,20 @@ def create_package(packets: List, input_stream, max_dur: float, fmt: str):
 def run_packager(loop: asyncio.AbstractEventLoop, conveyor_belt: asyncio.Queue, log_q: asyncio.Queue, 
                  target_url: str, cookies: str, extractor_args: str):
     
-    # 1. Write Cookies to Temp File
+    # 1. Write Cookies to Temp File (With Formatting Fix)
     if cookies:
         try:
+            # FIX: Convert literal string characters "\n" and "\t" to actual formatting
+            formatted_cookies = cookies.replace("\\n", "\n").replace("\\t", "\t")
+            
             with open(CONFIG.COOKIE_FILE, "w") as f:
-                f.write(cookies)
-            log(log_q, f"[SYSTEM] 🍪 Cookies written to {CONFIG.COOKIE_FILE}")
+                f.write(formatted_cookies)
+            log(log_q, f"[SYSTEM] 🍪 Cookies written to {CONFIG.COOKIE_FILE} (Formatted)")
         except Exception as e:
             log(log_q, f"[ERROR] Failed to write cookies: {e}")
 
     # 2. Build Command
-    # CRITICAL FIX: Use sys.executable -m yt_dlp instead of just "yt-dlp"
+    # CRITICAL: Use sys.executable to ensure we find the installed module
     cmd = [
         sys.executable, "-m", "yt_dlp", 
         "-f", "ba", 
@@ -118,14 +121,12 @@ def run_packager(loop: asyncio.AbstractEventLoop, conveyor_belt: asyncio.Queue, 
     if extractor_args:
         cmd.extend(["--extractor-args", extractor_args])
     else:
-        # Default fallback if user sends nothing
         cmd.extend(["--extractor-args", "youtube:player_client=tv;playback_wait=2"])
 
     # Add URL
     cmd.append(target_url)
 
     log(log_q, f"[PACKAGER] 🏭 Starting: {target_url}")
-    # log(log_q, f"[CMD] {' '.join(cmd)}") # Debug command
     
     # Run process
     process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)

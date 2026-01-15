@@ -1,56 +1,43 @@
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import HTMLResponse, FileResponse
+from fastapi.responses import HTMLResponse, FileResponse, StreamingResponse
 import os
 import sys
 import subprocess
 import mimetypes
 import shutil
 import platform
+import asyncio
 from datetime import datetime
 
 # ========================================================
 # 1. RUNTIME CONFIGURATION
 # ========================================================
-# This section ensures Vercel looks in '_vendor' for packages
-# and 'bin' for executables.
-
-# 1. Determine Project Root
-# Vercel usually mounts the app in /var/task. We check for that first.
 current_dir = os.path.dirname(os.path.abspath(__file__))
 if os.path.exists("/var/task"):
     project_root = "/var/task"
 else:
-    # Fallback for local testing or different structure
     project_root = os.getcwd()
 
-# 2. Define Paths
 vendor_path = os.path.join(project_root, "_vendor")
 lib_path = os.path.join(project_root, "lib")
 bin_path = os.path.join(project_root, "bin")
 build_info_path = os.path.join(project_root, "build_env_info.txt")
 
 # --- A. Link Python Modules (_vendor) ---
-# CRITICAL: This fixes "ModuleNotFoundError: No module named 'av'"
 if os.path.exists(vendor_path):
-    # 1. Add to the running application's path immediately
     if vendor_path not in sys.path:
         sys.path.insert(0, vendor_path)
-    
-    # 2. Add to Environment Variable so subprocesses (Terminal) find it too
     current_pp = os.environ.get("PYTHONPATH", "")
     os.environ["PYTHONPATH"] = f"{vendor_path}:{current_pp}"
 
 # --- B. Link Executables (PATH) ---
-# Allows running './bin/ffmpeg' commands easily
 if os.path.exists(bin_path):
     os.environ["PATH"] = f"{bin_path}:{os.environ.get('PATH', '')}"
     try:
-        # Ensure they are executable
         subprocess.run(f"chmod -R +x {bin_path}", shell=True)
     except: pass
 
 # --- C. Link Shared Libraries (LD_LIBRARY_PATH) ---
-# Helps external binaries find .so files in /lib
 if os.path.exists(lib_path):
     os.environ["LD_LIBRARY_PATH"] = f"{lib_path}:{os.environ.get('LD_LIBRARY_PATH', '')}"
 
@@ -58,21 +45,17 @@ if os.path.exists(lib_path):
 # 2. ENV & PYAV STATUS CHECK
 # ========================================================
 def get_runtime_env_info():
-    """Gathers glibc, ldd, and os info for the current runtime."""
     info = {
         "python_version": sys.version,
         "platform": platform.platform(),
         "glibc_python": platform.libc_ver()
     }
-    
-    # Get LDD version via shell
     try:
         res = subprocess.run(["ldd", "--version"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
         info["ldd_raw"] = res.stdout
     except Exception as e:
         info["ldd_raw"] = f"Error: {e}"
 
-    # Get OS Release via file
     try:
         if os.path.exists("/etc/os-release"):
             with open("/etc/os-release", "r") as f:
@@ -84,17 +67,13 @@ def get_runtime_env_info():
         
     return info
 
-# Print Env Info to Console (Logs) on Startup
 print("--- RUNTIME ENVIRONMENT CHECK ---")
 runtime_info = get_runtime_env_info()
 print(f"OS: {runtime_info['platform']}")
-print(f"GLIBC (Python Detect): {runtime_info['glibc_python']}")
-print(f"LDD Output:\n{runtime_info['ldd_raw'].splitlines()[0] if runtime_info['ldd_raw'] else 'Empty'}")
 print("---------------------------------")
 
 av_msg = "Initializing..."
 try:
-    # Because we added _vendor to sys.path above, this should work now
     import av
     av_msg = f"✅ PyAV {av.__version__} Ready | Codecs: {len(av.codecs_available)}"
 except ImportError as e:
@@ -102,18 +81,23 @@ except ImportError as e:
 except Exception as e:
     av_msg = f"❌ Runtime Error: {e}"
 
+# --- IMPORT TESTFLY ---
+# We import this after path patching so it can find 'av'
+try:
+    from . import testfly
+except ImportError:
+    # Fallback if running locally directly
+    import testfly
+
 # ========================================================
 # 3. HELPER FUNCTIONS
 # ========================================================
 def get_size_str(path):
-    """Calculates folder size nicely."""
     total = 0
-    # Use 'du' if available for speed
     try:
         res = subprocess.run(["du", "-sb", path], stdout=subprocess.PIPE, text=True)
         total = int(res.stdout.split()[0])
     except:
-        # Fallback to python walk
         for dp, dn, fn in os.walk(path):
             for f in fn:
                 try: total += os.path.getsize(os.path.join(dp, f))
@@ -129,13 +113,24 @@ def get_size_str(path):
 # ========================================================
 app = FastAPI()
 
+@app.get("/api/fly")
+async def fly_process():
+    """Starts the testfly process and streams logs."""
+    q = asyncio.Queue()
+    # Run the complex logic in background
+    asyncio.create_task(testfly.run_fly_process(q))
+    
+    async def log_generator():
+        while True:
+            data = await q.get()
+            if data is None: break
+            yield data
+            
+    return StreamingResponse(log_generator(), media_type="text/plain")
+
 @app.get("/api/env")
 def env_details():
-    """Returns Build vs Runtime environment details."""
-    # 1. Runtime Info (Calculated now)
     runtime = get_runtime_env_info()
-    
-    # 2. Build Info (Read from file created by avp.sh)
     build_raw = "Build info file not found (maybe run locally?)."
     if os.path.exists(build_info_path):
         try:
@@ -144,10 +139,7 @@ def env_details():
         except Exception as e:
             build_raw = f"Error reading build info: {e}"
             
-    return {
-        "runtime": runtime,
-        "build_raw": build_raw
-    }
+    return {"runtime": runtime, "build_raw": build_raw}
 
 @app.get("/api/list")
 def list_files(path: str = "/"):
@@ -155,7 +147,6 @@ def list_files(path: str = "/"):
     items = []
     try:
         with os.scandir(path) as entries:
-            # Sort: Directories first, then files
             for e in sorted(entries, key=lambda x: (not x.is_dir(), x.name.lower())):
                 try:
                     items.append({
@@ -169,10 +160,8 @@ def list_files(path: str = "/"):
 
 @app.get("/api/shell")
 def run_shell(cmd: str):
-    """Run a shell command (Stateless)."""
     if not cmd: return {"out": ""}
     try:
-        # We pass os.environ to ensure the shell sees the new PYTHONPATH
         res = subprocess.run(
             cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, 
             text=True, timeout=5, cwd=project_root, env=os.environ
@@ -183,11 +172,8 @@ def run_shell(cmd: str):
 
 @app.get("/api/stats")
 def system_stats():
-    """Storage usage dashboard."""
     stats = []
     app_size_raw = 0
-    
-    # Check key directories
     locations = [
         ("App Code", "/var/task"),
         ("Vendor Libs", vendor_path),
@@ -203,28 +189,17 @@ def system_stats():
                 r = subprocess.run(["du","-sb",path], stdout=subprocess.PIPE, text=True)
                 total = int(r.stdout.split()[0])
             except: pass
-            
             if path == "/var/task": app_size_raw = total
-            
-            stats.append({
-                "label": f"{label} ({path})",
-                "size_fmt": get_size_str(path),
-                "raw": total
-            })
+            stats.append({"label": f"{label} ({path})", "size_fmt": get_size_str(path), "raw": total})
 
-    return {
-        "stats": stats, 
-        "warning": app_size_raw > 240*1024*1024 # Warn if close to 250MB limit
-    }
+    return {"stats": stats, "warning": app_size_raw > 240*1024*1024}
 
 @app.get("/api/view")
 def view_file(path: str):
     if not os.path.exists(path): return {"error": "File not found"}
     try:
-        # Security check for binaries
         with open(path, 'rb') as f:
             if b'\x00' in f.read(1024): return {"error": "Binary file cannot be viewed."}
-        # Read text
         with open(path, 'r', encoding='utf-8', errors='replace') as f:
             return {"content": f.read(200_000)}
     except Exception as e: return {"error": str(e)}
@@ -236,8 +211,7 @@ def delete_file(path: str):
         else: os.remove(path)
         return {"ok": True}
     except OSError as e:
-        msg = "Read-Only Filesystem" if e.errno == 30 else e.strerror
-        return {"error": f"Failed: {msg}"}
+        return {"error": f"Failed: {e}"}
 
 @app.get("/api/download")
 def download(path: str):
@@ -285,8 +259,8 @@ def index():
         tr:hover {{ background:#f0f7ff; }}
         .act-btn {{ color:red; cursor:pointer; margin-left:10px; font-weight:bold; }}
         
-        /* Terminal */
-        #term-out {{ flex-grow:1; background:#1e1e1e; color:#ccc; padding:15px; font-family:monospace; white-space:pre-wrap; overflow-y:auto; }}
+        /* Terminal & Fly */
+        #term-out, #fly-out {{ flex-grow:1; background:#1e1e1e; color:#ccc; padding:15px; font-family:monospace; white-space:pre-wrap; overflow-y:auto; }}
         #term-in {{ background:#333; color:white; border:none; padding:10px; font-family:monospace; outline:none; }}
         
         /* Stats */
@@ -324,6 +298,7 @@ def index():
         <div class="nav-head">Tools</div>
         <div id="btn-exp" class="nav-item active" onclick="show('explorer')">📂 Explorer</div>
         <div id="btn-term" class="nav-item" onclick="show('terminal')">💻 Terminal</div>
+        <div id="btn-fly" class="nav-item" onclick="show('fly')">🚀 TestFly Job</div>
         <div id="btn-stat" class="nav-item" onclick="loadStats()">📊 Storage Stats</div>
         <div id="btn-env" class="nav-item" onclick="loadEnv()">ℹ️ Environment</div>
         
@@ -343,6 +318,15 @@ def index():
         <div id="terminal" class="panel">
             <div id="term-out">Vercel Shell.\\nType 'tree', 'jq', 'ls -la', 'busybox'.\\n</div>
             <input id="term-in" placeholder="Command..." autocomplete="off">
+        </div>
+        
+        <!-- TESTFLY -->
+        <div id="fly" class="panel">
+            <div style="padding:10px; border-bottom:1px solid #ddd; display:flex; align-items:center; gap:10px; background:#f5f5f5;">
+                <button style="background:var(--acc); color:white; border:none; padding:8px 16px;" onclick="runFly()">▶ Start Processing Job</button>
+                <span style="font-size:12px; color:#666;">(Stream YouTube -> Mux -> AssemblyAI/Deepgram)</span>
+            </div>
+            <div id="fly-out">Click Start to begin streaming logs...</div>
         </div>
         
         <!-- STATS -->
@@ -375,9 +359,9 @@ def index():
         document.querySelectorAll('.nav-item').forEach(e=>e.classList.remove('active'));
         document.getElementById(id).classList.add('active');
         
-        // Map ID to button ID
         let btnId = 'btn-exp';
         if(id === 'terminal') btnId = 'btn-term';
+        if(id === 'fly') btnId = 'btn-fly';
         if(id === 'stats') btnId = 'btn-stat';
         if(id === 'env') btnId = 'btn-env';
         document.getElementById(btnId).classList.add('active');
@@ -401,9 +385,30 @@ def index():
         }});
     }}
     
-    async function viewLog() {{
-        viewFile('/var/task/build_snapshot.log');
+    // --- TestFly Logic ---
+    async function runFly() {{
+        const out = document.getElementById('fly-out');
+        out.textContent = "Requesting job start...\\n";
+        
+        try {{
+            const response = await fetch('/api/fly');
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            
+            while (true) {{
+                const {{ value, done }} = await reader.read();
+                if (done) break;
+                const chunk = decoder.decode(value, {{stream: true}});
+                out.appendChild(document.createTextNode(chunk));
+                out.scrollTop = out.scrollHeight;
+            }}
+            out.appendChild(document.createTextNode("\\n[Stream Connection Closed]"));
+        }} catch(e) {{
+            out.textContent += "\\nError: " + e;
+        }}
     }}
+    
+    async function viewLog() {{ viewFile('/var/task/build_snapshot.log'); }}
 
     async function loadStats() {{
         show('stats');
@@ -427,20 +432,10 @@ def index():
         c.innerHTML = 'Fetching environment details...';
         const res = await fetch('/api/env');
         const d = await res.json();
-        
         c.innerHTML = `
             <h3>🏃 Runtime Environment (Now)</h3>
-            <pre class="env-block">
-<b>OS Platform:</b> ${{d.runtime.platform}}
-<b>GLIBC (Python):</b> ${{d.runtime.glibc_python}}
-<b>OS Release:</b>
-${{d.runtime.os_release}}
-
-<b>LDD Output:</b>
-${{d.runtime.ldd_raw}}
-            </pre>
-            
-            <h3>🏗️ Build Environment (During Install)</h3>
+            <pre class="env-block"><b>OS:</b> ${{d.runtime.platform}}\\n<b>GLIBC:</b> ${{d.runtime.glibc_python}}\\n<b>LDD:</b>\\n${{d.runtime.ldd_raw}}</pre>
+            <h3>🏗️ Build Environment</h3>
             <pre class="env-block">${{d.build_raw}}</pre>
         `;
     }}
@@ -464,7 +459,6 @@ ${{d.runtime.ldd_raw}}
     function ref() {{ nav(cur); }}
     document.getElementById('addr').onkeypress = e => {{ if(e.key==='Enter') nav(e.target.value); }};
 
-    // Terminal
     const tin=document.getElementById('term-in'), tout=document.getElementById('term-out');
     tin.onkeypress = async e => {{
         if(e.key==='Enter') {{

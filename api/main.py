@@ -75,7 +75,7 @@ def load_build_fs_cache():
     """Parses build_fs.index into a dictionary: parent_path -> [children]"""
     if not os.path.exists(paths["build_index"]): return
     
-    print("Loading Build Snapshot...")
+    print(f"Loading Build Snapshot from {paths['build_index']}...")
     try:
         with open(paths["build_index"], 'r', encoding='utf-8') as f:
             for line in f:
@@ -87,11 +87,15 @@ def load_build_fs_cache():
                 # Determine Parent directory to act as Key
                 parent = os.path.dirname(path)
                 
-                # Ensure the entry is valid
+                # Skip entry for "/" itself if it appears, or ensure it doesn't break logic
+                if path == '/': continue
+
+                # Normalize parent: if path is /bin, parent is /
+                
                 if parent not in BUILD_FS_CACHE:
                     BUILD_FS_CACHE[parent] = []
                 
-                # Check for duplicates (in case logic writes root twice)
+                # Deduplicate
                 existing = next((x for x in BUILD_FS_CACHE[parent] if x['path'] == path), None)
                 if existing: continue
 
@@ -106,6 +110,8 @@ def load_build_fs_cache():
         # Sort children for nice display
         for k in BUILD_FS_CACHE:
             BUILD_FS_CACHE[k].sort(key=lambda x: (not x["is_dir"], x["name"].lower()))
+        
+        print(f"Snapshot Loaded. Keys: {len(BUILD_FS_CACHE)}")
             
     except Exception as e:
         print(f"Error loading build index: {e}")
@@ -202,8 +208,11 @@ def list_files(path: str = "/", source: str = "runtime"):
     
     if source == "build":
         # Query the In-Memory Cache
-        # Strip trailing slash if not root for consistency
-        lookup_path = path.rstrip('/') if path != '/' else path
+        # Strip trailing slash if not root for consistency, BUT ensure root is "/"
+        lookup_path = path
+        if lookup_path != '/' and lookup_path.endswith('/'):
+            lookup_path = lookup_path.rstrip('/')
+            
         items = BUILD_FS_CACHE.get(lookup_path, [])
         return {"current_path": path, "items": items, "source": "build"}
 

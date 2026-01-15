@@ -115,19 +115,26 @@ app = FastAPI()
 class FlyRequest(BaseModel):
     url: str
     cookies: str
-    args: str = "youtube:player_client=all"
+    chunk_size: str = "8M"
+    limit_rate: str = "4M"
+    wait_time: str = "2"
+    player_clients: str = "tv,android,ios"
+    po_token: str = ""
 
 @app.post("/api/fly")
 async def fly_process(payload: FlyRequest):
-    """Starts the testfly process and streams logs."""
+    """Starts the testfly process with specific configuration."""
     q = asyncio.Queue()
     
-    # Run in background with provided payload
     asyncio.create_task(testfly.run_fly_process(
         q, 
         payload.url, 
-        payload.cookies, 
-        payload.args
+        payload.cookies,
+        payload.chunk_size,
+        payload.limit_rate,
+        payload.player_clients,
+        payload.wait_time,
+        payload.po_token
     ))
     
     async def log_generator():
@@ -273,6 +280,12 @@ def index():
         #term-out, #fly-out {{ flex-grow:1; background:#1e1e1e; color:#ccc; padding:15px; font-family:monospace; white-space:pre-wrap; overflow-y:auto; }}
         #term-in {{ background:#333; color:white; border:none; padding:10px; font-family:monospace; outline:none; }}
         
+        /* Fly Form */
+        .fly-form {{ padding:15px; border-bottom:1px solid #ddd; background:#f9f9f9; display:grid; grid-template-columns: 1fr 1fr 1fr; gap:10px; }}
+        .fly-full {{ grid-column: 1 / -1; }}
+        .fly-lbl {{ font-size:11px; font-weight:bold; color:#666; margin-bottom:2px; display:block; }}
+        input, textarea {{ width:100%; border:1px solid #ccc; padding:6px; border-radius:4px; font-family:monospace; font-size:12px; }}
+        
         /* Stats */
         .stat-row {{ padding:15px; border-bottom:1px solid #eee; }}
         .bar-bg {{ height:6px; background:#eee; border-radius:3px; margin-top:5px; overflow:hidden; }}
@@ -281,11 +294,6 @@ def index():
         /* Env Info */
         pre.env-block {{ background:#f5f5f5; padding:10px; border-radius:5px; overflow-x:auto; font-size:12px; border:1px solid #ddd; }}
         h3 {{ margin-top:20px; margin-bottom:10px; border-bottom:1px solid #eee; padding-bottom:5px; }}
-        
-        /* Fly Form */
-        .fly-form {{ padding:10px; border-bottom:1px solid #ddd; background:#f9f9f9; display:flex; flex-direction:column; gap:10px; }}
-        .fly-row {{ display:flex; gap:10px; }}
-        input, textarea {{ border:1px solid #ccc; padding:5px; border-radius:3px; font-family:monospace; font-size:12px; }}
         
         /* Modal */
         #modal {{ display:none; position:fixed; inset:0; background:rgba(0,0,0,0.5); z-index:99; align-items:center; justify-content:center; }}
@@ -338,14 +346,44 @@ def index():
         <!-- TESTFLY -->
         <div id="fly" class="panel">
             <div class="fly-form">
-                <div class="fly-row">
-                    <input id="fly-url" style="flex:2" placeholder="YouTube URL (https://...)" value="https://www.youtube.com/watch?v=ZNdVzOBga6k">
-                    <input id="fly-args" style="flex:3" placeholder="Extractor Args (po_token=...)" value='youtube:player_client=all;po_token=web.gvs+MlMQUj3TTz08aRBuqkQKUJI8sgaSz5WHWnAeQjJN7Jv-qhe-jZfl7VTihUv-RpMuTIpSK6hNhYf05Lt9IVFY-Gd4O1PI0miFlyOlU0zhdIr9Ac5aew=='>
+                <div class="fly-full">
+                    <label class="fly-lbl">YouTube URL</label>
+                    <input id="fly-url" value="https://www.youtube.com/watch?v=ZNdVzOBga6k">
                 </div>
-                <textarea id="fly-cookies" rows="4" placeholder="# Paste Netscape Cookies Content Here..."></textarea>
-                <button style="background:var(--acc); color:white; border:none; padding:8px;" onclick="runFly()">▶ Start Processing Job</button>
+                
+                <div>
+                    <label class="fly-lbl">Chunk Size</label>
+                    <input id="fly-chunk" value="8M">
+                </div>
+                <div>
+                    <label class="fly-lbl">Speed Limit</label>
+                    <input id="fly-limit" value="4M">
+                </div>
+                <div>
+                    <label class="fly-lbl">Playback Wait (sec)</label>
+                    <input id="fly-wait" value="2">
+                </div>
+                
+                <div class="fly-full">
+                    <label class="fly-lbl">Player Clients (comma separated)</label>
+                    <input id="fly-clients" value="tv,android,ios,web_creator,mweb">
+                </div>
+
+                <div class="fly-full">
+                    <label class="fly-lbl">PO Token</label>
+                    <input id="fly-token" placeholder="web.gvs+...">
+                </div>
+
+                <div class="fly-full">
+                    <label class="fly-lbl">Netscape Cookies</label>
+                    <textarea id="fly-cookies" rows="3" placeholder="# Paste content here (literal tabs/newlines from curl response ok)"></textarea>
+                </div>
+                
+                <div class="fly-full">
+                    <button style="background:var(--acc); color:white; border:none; padding:10px; width:100%" onclick="runFly()">▶ Start Processing Job</button>
+                </div>
             </div>
-            <div id="fly-out">Ready. Paste cookies and click Start.</div>
+            <div id="fly-out">Ready. Configure above and click Start.</div>
         </div>
         
         <!-- STATS -->
@@ -407,19 +445,25 @@ def index():
     // --- TestFly Logic ---
     async function runFly() {{
         const out = document.getElementById('fly-out');
-        const url = document.getElementById('fly-url').value;
-        const cookies = document.getElementById('fly-cookies').value;
-        const args = document.getElementById('fly-args').value;
+        const payload = {{
+            url: document.getElementById('fly-url').value,
+            cookies: document.getElementById('fly-cookies').value,
+            chunk_size: document.getElementById('fly-chunk').value,
+            limit_rate: document.getElementById('fly-limit').value,
+            wait_time: document.getElementById('fly-wait').value,
+            player_clients: document.getElementById('fly-clients').value,
+            po_token: document.getElementById('fly-token').value
+        }};
 
-        if(!url) return alert("URL required");
+        if(!payload.url) return alert("URL required");
         
-        out.textContent = "Writing cookies and starting job...\\n";
+        out.textContent = "Configuration sent. Starting job...\\n";
         
         try {{
             const response = await fetch('/api/fly', {{
                 method: 'POST',
                 headers: {{'Content-Type': 'application/json'}},
-                body: JSON.stringify({{ url, cookies, args }})
+                body: JSON.stringify(payload)
             }});
             
             const reader = response.body.getReader();

@@ -51,12 +51,15 @@ def miner_log_monitor(pipe, q):
     """Reads raw stderr from yt-dlp and pushes to queue."""
     for line in iter(pipe.readline, b""):
         text = line.decode("utf-8", errors="ignore")
+        # Filter out extremely verbose/noisy lines if needed
         if "[download]" in text:
-            text = text.replace("[download]", "[MINER] ⛏️ ")
+            # Shorten the progress log
+            text = text.replace("[download]", "[MINER] ⛏️ ").strip()
         elif "[youtube]" in text:
             text = text.replace("[youtube]", "[MINER] 🔎 ")
         elif "[info]" in text:
             text = text.replace("[info]", "[MINER] ℹ️ ")
+        
         log(q, text.strip())
 
 # --- CPU BOUND ---
@@ -92,7 +95,7 @@ def run_packager(loop: asyncio.AbstractEventLoop, conveyor_belt: asyncio.Queue, 
                  chunk_size: str, limit_rate: str, 
                  player_clients: str, wait_time: str, po_token: str):
     
-    # 1. Write Cookies to Temp File
+    # 1. Write Cookies
     if cookies:
         try:
             formatted_cookies = cookies.replace(r"\n", "\n").replace(r"\t", "\t")
@@ -102,21 +105,18 @@ def run_packager(loop: asyncio.AbstractEventLoop, conveyor_belt: asyncio.Queue, 
         except Exception as e:
             log(log_q, f"[ERROR] Failed to write cookies: {e}")
 
-    # 2. Construct Extractor Args
-    # Format: youtube:player_client=...;playback_wait=...;po_token=...
+    # 2. Extractor Args
     extractor_params = []
-    if player_clients:
-        extractor_params.append(f"player_client={player_clients}")
-    if wait_time:
-        extractor_params.append(f"playback_wait={wait_time}")
-    if po_token:
-        extractor_params.append(f"po_token={po_token}")
+    if player_clients: extractor_params.append(f"player_client={player_clients}")
+    if wait_time: extractor_params.append(f"playback_wait={wait_time}")
+    if po_token: extractor_params.append(f"po_token={po_token}")
     
     extractor_string = f"youtube:{';'.join(extractor_params)}" if extractor_params else ""
 
     # 3. Build Command
     cmd = [
         sys.executable, "-m", "yt_dlp", 
+        "--newline",  # <--- CRITICAL: Forces real-time logging
         "-f", "ba", 
         "-S", "+abr,+tbr,+size",
         "--http-chunk-size", chunk_size,
@@ -124,32 +124,31 @@ def run_packager(loop: asyncio.AbstractEventLoop, conveyor_belt: asyncio.Queue, 
         "-o", "-"
     ]
 
-    if cookies:
-        cmd.extend(["--cookies", CONFIG.COOKIE_FILE])
-    
-    if extractor_string:
-        cmd.extend(["--extractor-args", extractor_string])
+    if cookies: cmd.extend(["--cookies", CONFIG.COOKIE_FILE])
+    if extractor_string: cmd.extend(["--extractor-args", extractor_string])
 
     cmd.append(target_url)
 
     log(log_q, f"[PACKAGER] 🏭 Starting: {target_url}")
-    log(log_q, f"[CONFIG] Chunk: {chunk_size} | Rate: {limit_rate} | Clients: {player_clients or 'Default'}")
+    log(log_q, f"[CONFIG] Chunk: {chunk_size} | Rate: {limit_rate} | Clients: {player_clients}")
     
-    # Run process
     process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     
     log_thread = threading.Thread(target=miner_log_monitor, args=(process.stderr, log_q))
     log_thread.daemon = True
     log_thread.start()
 
+    log(log_q, "[PACKAGER] ⏳ Waiting for stream data...")
+
     try:
+        # Open PyAV on the stdout pipe
         in_container = av.open(process.stdout, mode="r")
         in_stream = in_container.streams.audio[0]
         codec = in_stream.codec_context.name
         out_fmt = CODEC_MAP.get(codec, "matroska")
         mime = f"audio/{out_fmt}"
 
-        log(log_q, f"[PACKAGER] 📦 Raw Material: {codec} | Output: {out_fmt}")
+        log(log_q, f"[PACKAGER] ✅ Stream Connected! Codec: {codec} | Container: {out_fmt}")
 
         buffer = []
         box_id = 0

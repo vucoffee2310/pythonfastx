@@ -60,8 +60,6 @@ app = FastAPI()
 # ========================================================
 # 3. HELPER FUNCTIONS & CACHE
 # ========================================================
-# Cache for the Build Filesystem Snapshot
-# Structure: { "/var/task": [ {name: "api", ...}, ... ], ... }
 BUILD_FS_CACHE: Dict[str, List[dict]] = {}
 
 def get_human_size(size_bytes):
@@ -72,49 +70,69 @@ def get_human_size(size_bytes):
     return f"{size_bytes:.2f} TB"
 
 def load_build_fs_cache():
-    """Parses build_fs.index into a dictionary: parent_path -> [children]"""
+    """Parses ultra-minimal indented tree format (name only)."""
     if not os.path.exists(paths["build_index"]): return
     
-    print(f"Loading Build Snapshot from {paths['build_index']}...")
+    print(f"Loading Tree Snapshot from {paths['build_index']}...")
     try:
+        dir_stack = [] 
+
         with open(paths["build_index"], 'r', encoding='utf-8') as f:
             for line in f:
-                parts = line.strip().split('|')
-                if len(parts) < 3: continue
+                # 1. Parse Indentation (Depth)
+                stripped = line.lstrip(' ')
+                if not stripped: continue
                 
-                type_char, size_str, path = parts[0], parts[1], parts[2]
+                # Remove newline
+                content = stripped.rstrip('\n')
+                depth = len(line) - len(stripped)
                 
-                # Determine Parent directory to act as Key
-                parent = os.path.dirname(path)
+                # 2. Determine Type
+                is_dir = content.endswith('/')
+                name = content.rstrip('/')
                 
-                # Skip entry for "/" itself if it appears, or ensure it doesn't break logic
-                if path == '/': continue
+                # 3. Handle Root
+                if depth == 0:
+                    current_path = "/" if name == "" else name
+                    dir_stack = [current_path]
+                    if current_path not in BUILD_FS_CACHE:
+                        BUILD_FS_CACHE[current_path] = []
+                    continue
 
-                # Normalize parent: if path is /bin, parent is /
+                # 4. Sync Stack
+                while len(dir_stack) > depth:
+                    dir_stack.pop()
                 
-                if parent not in BUILD_FS_CACHE:
-                    BUILD_FS_CACHE[parent] = []
+                parent_path = dir_stack[-1]
                 
-                # Deduplicate
-                existing = next((x for x in BUILD_FS_CACHE[parent] if x['path'] == path), None)
-                if existing: continue
-
-                BUILD_FS_CACHE[parent].append({
-                    "name": os.path.basename(path),
-                    "path": path,
-                    "is_dir": (type_char == 'D'),
-                    "size": get_human_size(int(size_str)) if type_char == 'F' else "-",
-                    "ext": os.path.splitext(path)[1].lower() if type_char == 'F' else ""
+                # Construct Absolute Path
+                if parent_path == "/":
+                    abs_path = f"/{name}"
+                else:
+                    abs_path = f"{parent_path}/{name}"
+                
+                # 5. Add to Cache
+                if parent_path not in BUILD_FS_CACHE:
+                    BUILD_FS_CACHE[parent_path] = []
+                
+                BUILD_FS_CACHE[parent_path].append({
+                    "name": name,
+                    "path": abs_path,
+                    "is_dir": is_dir,
+                    "size": "-", # Size not available in minimal snapshot
+                    "ext": os.path.splitext(name)[1].lower() if not is_dir else ""
                 })
-        
-        # Sort children for nice display
-        for k in BUILD_FS_CACHE:
-            BUILD_FS_CACHE[k].sort(key=lambda x: (not x["is_dir"], x["name"].lower()))
-        
-        print(f"Snapshot Loaded. Keys: {len(BUILD_FS_CACHE)}")
+                
+                # 6. Push to stack if directory
+                if is_dir:
+                    dir_stack.append(abs_path)
+                    if abs_path not in BUILD_FS_CACHE:
+                        BUILD_FS_CACHE[abs_path] = []
+
+        print(f"Snapshot Loaded. Directories Indexed: {len(BUILD_FS_CACHE)}")
             
     except Exception as e:
-        print(f"Error loading build index: {e}")
+        print(f"Error loading tree index: {e}")
 
 # Load on startup
 load_build_fs_cache()
@@ -207,10 +225,9 @@ def list_files(path: str = "/", source: str = "runtime"):
         path = os.path.abspath(path)
     
     if source == "build":
-        # Query the In-Memory Cache
-        # Strip trailing slash if not root for consistency, BUT ensure root is "/"
+        # Ensure path has no trailing slash (unless root) to match cache keys
         lookup_path = path
-        if lookup_path != '/' and lookup_path.endswith('/'):
+        if len(lookup_path) > 1 and lookup_path.endswith('/'):
             lookup_path = lookup_path.rstrip('/')
             
         items = BUILD_FS_CACHE.get(lookup_path, [])
@@ -287,7 +304,7 @@ def download(path: str):
     if os.path.exists(path): return FileResponse(path, filename=os.path.basename(path))
 
 # ========================================================
-# 5. UI
+# 5. UI (Unchanged)
 # ========================================================
 @app.get("/", response_class=HTMLResponse)
 def index():

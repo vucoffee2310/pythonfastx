@@ -90,20 +90,22 @@ def create_package(packets: List, input_stream, max_dur: float, fmt: str):
 def run_packager(loop: asyncio.AbstractEventLoop, conveyor_belt: asyncio.Queue, log_q: asyncio.Queue, 
                  target_url: str, cookies: str, extractor_args: str):
     
-    # 1. Write Cookies to Temp File (With Formatting Fix)
+    # 1. Write Cookies to Temp File
     if cookies:
         try:
-            # FIX: Convert literal string characters "\n" and "\t" to actual formatting
-            formatted_cookies = cookies.replace("\\n", "\n").replace("\\t", "\t")
+            # CRITICAL FIX: Replace literal string escapes from input with actual characters
+            # This turns "\n" (2 chars) into an actual new line byte
+            formatted_cookies = cookies.replace(r"\n", "\n").replace(r"\t", "\t")
             
             with open(CONFIG.COOKIE_FILE, "w") as f:
                 f.write(formatted_cookies)
-            log(log_q, f"[SYSTEM] 🍪 Cookies written to {CONFIG.COOKIE_FILE} (Formatted)")
+                
+            log(log_q, f"[SYSTEM] 🍪 Cookies processed and written to {CONFIG.COOKIE_FILE}")
         except Exception as e:
             log(log_q, f"[ERROR] Failed to write cookies: {e}")
 
     # 2. Build Command
-    # CRITICAL: Use sys.executable to ensure we find the installed module
+    # Using sys.executable to ensure we use the installed python env
     cmd = [
         sys.executable, "-m", "yt_dlp", 
         "-f", "ba", 

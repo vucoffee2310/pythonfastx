@@ -43,15 +43,15 @@ else
     echo "✨ bin/tree already exists. Skipping."
 fi
 
-# --- 3. System Tools: JQ ---
-if [ ! -f "bin/jq" ]; then
-    echo "🦆 Downloading Static JQ..."
-    curl -L -s -o bin/jq https://github.com/jqlang/jq/releases/download/jq-1.7.1/jq-linux-amd64
-    chmod +x bin/jq
-    echo "✅ JQ installed to bin/"
-else
-    echo "✨ bin/jq already exists. Skipping."
-fi
+# # --- 3. System Tools: JQ ---
+# if [ ! -f "bin/jq" ]; then
+#     echo "🦆 Downloading Static JQ..."
+#     curl -L -s -o bin/jq https://github.com/jqlang/jq/releases/download/jq-1.7.1/jq-linux-amd64
+#     chmod +x bin/jq
+#     echo "✅ JQ installed to bin/"
+# else
+#     echo "✨ bin/jq already exists. Skipping."
+# fi
 
 # --- 4. System Tools: Deno ---
 if [ ! -f "bin/deno" ]; then

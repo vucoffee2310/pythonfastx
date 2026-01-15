@@ -1,5 +1,0 @@
-fastapi
-uvicorn
-cython
-wheel
-setuptools

@@ -23,6 +23,7 @@ paths = {
     "bin": os.path.join(project_root, "bin"),
     "build_info": os.path.join(project_root, "build_env_info.txt"),
     "build_tools": os.path.join(project_root, "build_tools.json"),
+    "build_inodes": os.path.join(project_root, "python_inodes.json"),
     "build_index": os.path.join(project_root, "build_fs.index")
 }
 
@@ -73,7 +74,6 @@ def load_build_fs_cache():
     """Parses ultra-minimal indented tree format (name only)."""
     if not os.path.exists(paths["build_index"]): return
     
-    print(f"Loading Tree Snapshot from {paths['build_index']}...")
     try:
         dir_stack = [] 
 
@@ -83,7 +83,6 @@ def load_build_fs_cache():
                 stripped = line.lstrip(' ')
                 if not stripped: continue
                 
-                # Remove newline
                 content = stripped.rstrip('\n')
                 depth = len(line) - len(stripped)
                 
@@ -105,11 +104,8 @@ def load_build_fs_cache():
                 
                 parent_path = dir_stack[-1]
                 
-                # Construct Absolute Path
-                if parent_path == "/":
-                    abs_path = f"/{name}"
-                else:
-                    abs_path = f"{parent_path}/{name}"
+                if parent_path == "/": abs_path = f"/{name}"
+                else: abs_path = f"{parent_path}/{name}"
                 
                 # 5. Add to Cache
                 if parent_path not in BUILD_FS_CACHE:
@@ -119,17 +115,14 @@ def load_build_fs_cache():
                     "name": name,
                     "path": abs_path,
                     "is_dir": is_dir,
-                    "size": "-", # Size not available in minimal snapshot
+                    "size": "-",
                     "ext": os.path.splitext(name)[1].lower() if not is_dir else ""
                 })
                 
-                # 6. Push to stack if directory
                 if is_dir:
                     dir_stack.append(abs_path)
                     if abs_path not in BUILD_FS_CACHE:
                         BUILD_FS_CACHE[abs_path] = []
-
-        print(f"Snapshot Loaded. Directories Indexed: {len(BUILD_FS_CACHE)}")
             
     except Exception as e:
         print(f"Error loading tree index: {e}")
@@ -190,6 +183,14 @@ def compare_tools():
             "status": status
         })
     return comparison
+
+def get_python_inodes():
+    if os.path.exists(paths["build_inodes"]):
+        try:
+            with open(paths["build_inodes"], 'r') as f:
+                return json.load(f)
+        except: pass
+    return []
 
 # ========================================================
 # 4. API ENDPOINTS
@@ -276,6 +277,7 @@ def stats_endpoint():
         "av": av_status,
         "runtime": get_runtime_env_info(),
         "tools": compare_tools(),
+        "inodes": get_python_inodes(),
         "has_build_index": bool(BUILD_FS_CACHE)
     }
 
@@ -304,7 +306,7 @@ def download(path: str):
     if os.path.exists(path): return FileResponse(path, filename=os.path.basename(path))
 
 # ========================================================
-# 5. UI (Unchanged)
+# 5. UI
 # ========================================================
 @app.get("/", response_class=HTMLResponse)
 def index():
@@ -439,6 +441,13 @@ def index():
                 <div id="sys-info" style="font-family:var(--mono); font-size:12px; line-height:1.6; color:#888"></div>
             </div>
             <div class="card">
+                <h3 style="margin-top:0">Python Build Inodes</h3>
+                <table class="comp-table">
+                    <thead><tr><th>Path</th><th>Inode</th><th>Status</th></tr></thead>
+                    <tbody id="inode-list"></tbody>
+                </table>
+            </div>
+            <div class="card">
                 <h3 style="margin-top:0">Tool Availability</h3>
                 <table class="comp-table">
                     <thead><tr><th>Tool</th><th>Build Path</th><th>Runtime Path</th><th>Status</th></tr></thead>
@@ -569,6 +578,12 @@ def index():
         const info = data.runtime;
         document.getElementById('sys-info').innerHTML = `OS: ${{info.os}} (${{info.platform}})<br>Python: ${{info.python}} | Glibc: ${{info.glibc}}<br>AV Status: ${{data.av}}<br>Build Index: ${{data.has_build_index ? '✅ Loaded' : '❌ Missing'}}`;
         
+        const iBody = document.getElementById('inode-list');
+        iBody.innerHTML = '';
+        data.inodes.forEach(i => {{
+             iBody.innerHTML += `<tr><td><span class="path-cell" title="${{i.path}}">${{i.path}}</span></td><td style="font-family:var(--mono)">${{i.inode}}</td><td>${{i.status}}</td></tr>`;
+        }});
+
         const tbody = document.getElementById('tool-comp-list');
         tbody.innerHTML = '';
         data.tools.forEach(t => {{

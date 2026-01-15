@@ -101,8 +101,31 @@ echo "📊 Final Workspace Check"
 ./bin/tree -L 2 bin/
 
 # ========================================================
-# 8. BUILD ARTIFACT GENERATION (Minimal Tree)
+# 8. BUILD ARTIFACT GENERATION
 # ========================================================
+
+echo "🕵️  Snapshotting Specific Python Inodes..."
+python3 -c "
+import os, json
+targets = [
+    '/usr/bin/python3.9',
+    '/python312/bin/python3.12',
+    '/vercel/path0/.vercel/python/.venv/bin/python3.12'
+]
+results = []
+for p in targets:
+    try:
+        if os.path.exists(p):
+            stat = os.stat(p)
+            results.append({'path': p, 'inode': stat.st_ino, 'status': '✅ Found'})
+        else:
+            results.append({'path': p, 'inode': '-', 'status': '❌ Missing'})
+    except Exception as e:
+        results.append({'path': p, 'inode': '-', 'status': f'⚠️ Error: {e}'})
+
+with open('python_inodes.json', 'w') as f:
+    json.dump(results, f, indent=2)
+"
 
 echo "📝 Cataloging Build Tools..."
 python3 -c "

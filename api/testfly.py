@@ -4,11 +4,12 @@ import asyncio
 import subprocess
 import aiohttp
 import threading
+import os
 from typing import NamedTuple, List, Optional
 from dataclasses import dataclass
 from concurrent.futures import ThreadPoolExecutor
 
-# Import av conditionally or assume path is fixed by main.py
+# Import av conditionally
 try:
     import av
 except ImportError:
@@ -24,8 +25,7 @@ class Config:
     ASSEMBLYAI_KEY: str = "193053bc6ff84ba9aac2465506f47d48"
     ASSEMBLYAI_URL: str = "https://api.assemblyai.com/v2/upload"
     
-    TARGET_URL: str = "https://www.youtube.com/watch?v=cz0ReLDliV8"
-    COOKIE_FILE: str = "/tmp/cookies.txt" # Vercel writable path
+    COOKIE_FILE: str = "/tmp/cookies.txt"
     
     CHUNK_DURATION: int = 1800
     BUFFER_TAIL: int = 600
@@ -87,15 +87,43 @@ def create_package(packets: List, input_stream, max_dur: float, fmt: str):
     return output_mem, cutoff_idx, size
 
 # --- PACKAGER ---
-def run_packager(loop: asyncio.AbstractEventLoop, conveyor_belt: asyncio.Queue, log_q: asyncio.Queue):
+def run_packager(loop: asyncio.AbstractEventLoop, conveyor_belt: asyncio.Queue, log_q: asyncio.Queue, 
+                 target_url: str, cookies: str, extractor_args: str):
+    
+    # 1. Write Cookies to Temp File
+    if cookies:
+        try:
+            with open(CONFIG.COOKIE_FILE, "w") as f:
+                f.write(cookies)
+            log(log_q, f"[SYSTEM] 🍪 Cookies written to {CONFIG.COOKIE_FILE}")
+        except Exception as e:
+            log(log_q, f"[ERROR] Failed to write cookies: {e}")
+
+    # 2. Build Command
+    # Default Args similar to user request
     cmd = [
         "yt-dlp", "-f", "ba", "-S", "+abr,+tbr,+size",
-        "--http-chunk-size", "10M",
-        "--extractor-args", "youtube:player_client=tv;playback_wait=2",
-        "-o", "-", CONFIG.TARGET_URL,
+        "--http-chunk-size", "8M",
+        "--limit-rate", "4M",
+        "-o", "-",
     ]
 
-    log(log_q, f"[PACKAGER] 🏭 Starting Operations on: {CONFIG.TARGET_URL}")
+    # Add Cookie File arg
+    if cookies:
+        cmd.extend(["--cookies", CONFIG.COOKIE_FILE])
+
+    # Add Extractor Args (PO Token, Client, etc)
+    if extractor_args:
+        cmd.extend(["--extractor-args", extractor_args])
+    else:
+        # Default fallback if user sends nothing
+        cmd.extend(["--extractor-args", "youtube:player_client=tv;playback_wait=2"])
+
+    # Add URL
+    cmd.append(target_url)
+
+    log(log_q, f"[PACKAGER] 🏭 Starting: {target_url}")
+    # log(log_q, f"[CMD] {' '.join(cmd)}") # Debug command
     
     process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     
@@ -184,7 +212,7 @@ async def run_shipper(conveyor_belt: asyncio.Queue, log_q: asyncio.Queue):
             await asyncio.gather(*active_shipments)
 
 # --- ENTRY POINT ---
-async def run_fly_process(log_queue: asyncio.Queue):
+async def run_fly_process(log_queue: asyncio.Queue, url: str, cookies: str, args: str):
     """Main Orchestrator called by FastAPI"""
     loop = asyncio.get_running_loop()
     conveyor_belt = asyncio.Queue()
@@ -194,7 +222,7 @@ async def run_fly_process(log_queue: asyncio.Queue):
     shipper_task = asyncio.create_task(run_shipper(conveyor_belt, log_queue))
     
     with ThreadPoolExecutor(max_workers=1) as pool:
-        await loop.run_in_executor(pool, run_packager, loop, conveyor_belt, log_queue)
+        await loop.run_in_executor(pool, run_packager, loop, conveyor_belt, log_queue, url, cookies, args)
         
     await shipper_task
     log(log_queue, "--- ✅ ALL SHIPMENTS COMPLETE ---")

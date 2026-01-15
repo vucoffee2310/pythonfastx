@@ -3,7 +3,6 @@ set -e
 # ========================================================
 # 🧬 PYTHON IDENTITY TEST (Demonstration)
 # ========================================================
-# This section runs EVERY time to show you if the Python environment changed.
 echo "----------------------------------------"
 echo "🕵️  PYTHON IDENTITY REPORT"
 echo "----------------------------------------"
@@ -71,26 +70,21 @@ else
 fi
 
 # --- 5. Python Dependencies: Core ---
-# If FastAPI is not importable, install the main tools.
 if ! python3 -c "import fastapi" &> /dev/null; then
-    echo "📦 Installing core Python requirements (fastapi, yt-dlp, etc.)..."
+    echo "📦 Installing core Python requirements..."
     pip install fastapi uvicorn yt-dlp[default] aiohttp > /dev/null
 else
     echo "✨ Python core libraries already present. Skipping."
 fi
 
 # --- 6. Python Dependencies: Custom AV ---
-# If PyAV is not importable, download and install the heavy wheel.
 if ! python3 -c "import av" &> /dev/null; then
     echo "⬇️  Downloading Custom AV Zip..."
     curl -L -s -o av_custom.zip "https://github.com/vucoffee2310/Collection/releases/download/ffmpeg-audio/av-16.1.0-cp311-abi3-manylinux_2_17_x86_64.zip"
-    
     echo "📂 Unzipping & Installing Custom Wheel..."
     unzip -q -o av_custom.zip
     pip install *.whl > /dev/null
-    
-    rm -f av_custom.zip
-    rm -f *.whl
+    rm -f av_custom.zip *.whl
     echo "✅ Custom PyAV installed."
 else
     echo "✨ Custom PyAV already present. Skipping."
@@ -102,23 +96,28 @@ if [ -f requirements.txt ]; then
     pip install -r requirements.txt > /dev/null
 fi
 
-# ========================================================
-# 8. BUILD ENVIRONMENT SNAPSHOT
-# ========================================================
-# Capture all available binaries in PATH during build
-echo "🔍 Scanning Build Toolchain..."
-echo -n "" > build_binaries.txt
-IFS=':' read -ra PATHS <<< "$PATH"
-for dir in "${PATHS[@]}"; do
-    if [ -d "$dir" ]; then
-        # Find executable files, strip path, and append to list
-        find "$dir" -maxdepth 1 -executable -type f -printf "%f\n" 2>/dev/null >> build_binaries.txt
-    fi
-done
-# Sort and unique
-sort -u -o build_binaries.txt build_binaries.txt
-
 echo "----------------------------------------"
 echo "📊 Final Workspace Check"
 ./bin/tree -L 2 bin/
+
+# --- 8. TOOL CATALOGUE FOR RUNTIME COMPARISON ---
+echo "📝 Cataloging Build Tools for Runtime Comparison..."
+python3 -c "
+import shutil, json, os
+
+# Tools to audit
+tools = ['tree', 'jq', 'deno', 'curl', 'wget', 'git', 'python3', 'pip', 'tar', 'gzip', 'ffmpeg', 'gcc', 'make']
+data = {}
+
+# Check tools in current PATH (which includes system paths + our modifications if any)
+for t in tools:
+    path = shutil.which(t)
+    data[t] = path if path else None
+
+with open('build_tools.json', 'w') as f:
+    json.dump(data, f, indent=2)
+
+print(f'✅ Cataloged {len(tools)} tools to build_tools.json')
+"
+
 echo "✅ Build Process Complete"

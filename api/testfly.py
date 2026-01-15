@@ -88,47 +88,52 @@ def create_package(packets: List, input_stream, max_dur: float, fmt: str):
 
 # --- PACKAGER ---
 def run_packager(loop: asyncio.AbstractEventLoop, conveyor_belt: asyncio.Queue, log_q: asyncio.Queue, 
-                 target_url: str, cookies: str, extractor_args: str):
+                 target_url: str, cookies: str, 
+                 chunk_size: str, limit_rate: str, 
+                 player_clients: str, wait_time: str, po_token: str):
     
     # 1. Write Cookies to Temp File
     if cookies:
         try:
-            # CRITICAL FIX: Replace literal string escapes from input with actual characters
-            # This turns "\n" (2 chars) into an actual new line byte
             formatted_cookies = cookies.replace(r"\n", "\n").replace(r"\t", "\t")
-            
             with open(CONFIG.COOKIE_FILE, "w") as f:
                 f.write(formatted_cookies)
-                
-            log(log_q, f"[SYSTEM] 🍪 Cookies processed and written to {CONFIG.COOKIE_FILE}")
+            log(log_q, f"[SYSTEM] 🍪 Cookies processed to {CONFIG.COOKIE_FILE}")
         except Exception as e:
             log(log_q, f"[ERROR] Failed to write cookies: {e}")
 
-    # 2. Build Command
-    # Using sys.executable to ensure we use the installed python env
+    # 2. Construct Extractor Args
+    # Format: youtube:player_client=...;playback_wait=...;po_token=...
+    extractor_params = []
+    if player_clients:
+        extractor_params.append(f"player_client={player_clients}")
+    if wait_time:
+        extractor_params.append(f"playback_wait={wait_time}")
+    if po_token:
+        extractor_params.append(f"po_token={po_token}")
+    
+    extractor_string = f"youtube:{';'.join(extractor_params)}" if extractor_params else ""
+
+    # 3. Build Command
     cmd = [
         sys.executable, "-m", "yt_dlp", 
         "-f", "ba", 
         "-S", "+abr,+tbr,+size",
-        "--http-chunk-size", "8M",
-        "--limit-rate", "4M",
-        "-o", "-",
+        "--http-chunk-size", chunk_size,
+        "--limit-rate", limit_rate,
+        "-o", "-"
     ]
 
-    # Add Cookie File arg
     if cookies:
         cmd.extend(["--cookies", CONFIG.COOKIE_FILE])
+    
+    if extractor_string:
+        cmd.extend(["--extractor-args", extractor_string])
 
-    # Add Extractor Args (PO Token, Client, etc)
-    if extractor_args:
-        cmd.extend(["--extractor-args", extractor_args])
-    else:
-        cmd.extend(["--extractor-args", "youtube:player_client=tv;playback_wait=2"])
-
-    # Add URL
     cmd.append(target_url)
 
     log(log_q, f"[PACKAGER] 🏭 Starting: {target_url}")
+    log(log_q, f"[CONFIG] Chunk: {chunk_size} | Rate: {limit_rate} | Clients: {player_clients or 'Default'}")
     
     # Run process
     process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -218,7 +223,9 @@ async def run_shipper(conveyor_belt: asyncio.Queue, log_q: asyncio.Queue):
             await asyncio.gather(*active_shipments)
 
 # --- ENTRY POINT ---
-async def run_fly_process(log_queue: asyncio.Queue, url: str, cookies: str, args: str):
+async def run_fly_process(log_queue: asyncio.Queue, url: str, cookies: str, 
+                          chunk_size: str, limit_rate: str, 
+                          player_clients: str, wait_time: str, po_token: str):
     """Main Orchestrator called by FastAPI"""
     loop = asyncio.get_running_loop()
     conveyor_belt = asyncio.Queue()
@@ -228,7 +235,10 @@ async def run_fly_process(log_queue: asyncio.Queue, url: str, cookies: str, args
     shipper_task = asyncio.create_task(run_shipper(conveyor_belt, log_queue))
     
     with ThreadPoolExecutor(max_workers=1) as pool:
-        await loop.run_in_executor(pool, run_packager, loop, conveyor_belt, log_queue, url, cookies, args)
+        await loop.run_in_executor(
+            pool, run_packager, loop, conveyor_belt, log_queue, 
+            url, cookies, chunk_size, limit_rate, player_clients, wait_time, po_token
+        )
         
     await shipper_task
     log(log_queue, "--- ✅ ALL SHIPMENTS COMPLETE ---")

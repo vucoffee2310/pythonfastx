@@ -19,7 +19,7 @@ except ImportError:
 # --- CONFIGURATION ---
 @dataclass(frozen=True)
 class Config:
-    PROVIDER: str = "assemblyai"
+    PROVIDER: str = "deepgram"
     # In production, use os.environ.get("DEEPGRAM_KEY")
     DEEPGRAM_KEY: str = "d6bf3bf38250b6370e424a0805f6ef915ae00bec"
     DEEPGRAM_URL: str = "https://manage.deepgram.com/storage/assets"

@@ -52,28 +52,31 @@ def miner_log_monitor(pipe, q):
     """Reads raw stderr from yt-dlp, filters spam, and pushes to queue."""
     last_progress_time = 0.0
     
-    for line in iter(pipe.readline, b""):
-        text = line.decode("utf-8", errors="ignore").strip()
-        
-        if not text: continue
-
-        if "[download]" in text:
-            # Clean up the tag
-            clean_text = text.replace("[download]", "[MINER] ⛏️ ").strip()
+    try:
+        for line in iter(pipe.readline, b""):
+            text = line.decode("utf-8", errors="ignore").strip()
             
-            # Rate Limit: Only log progress every 0.5 seconds to prevent spam
-            now = time.time()
-            if (now - last_progress_time) > 0.5:
-                log(q, clean_text)
-                last_progress_time = now
+            if not text: continue
+
+            if "[download]" in text:
+                # Clean up the tag
+                clean_text = text.replace("[download]", "[MINER] ⛏️ ").strip()
                 
-        elif "[youtube]" in text:
-            log(q, text.replace("[youtube]", "[MINER] 🔎 "))
-        elif "[info]" in text:
-            log(q, text.replace("[info]", "[MINER] ℹ️ "))
-        else:
-            # Pass through other logs (errors, warnings, etc.) immediately
-            log(q, text)
+                # Rate Limit: Only log progress every 0.5 seconds to prevent spam
+                now = time.time()
+                if (now - last_progress_time) > 0.5:
+                    log(q, clean_text)
+                    last_progress_time = now
+                    
+            elif "[youtube]" in text:
+                log(q, text.replace("[youtube]", "[MINER] 🔎 "))
+            elif "[info]" in text:
+                log(q, text.replace("[info]", "[MINER] ℹ️ "))
+            else:
+                # Pass through other logs (errors, warnings, etc.) immediately
+                log(q, text)
+    except ValueError:
+        pass # Handle closed pipe errors during shutdown
 
 # --- CPU BOUND ---
 def create_package(packets: List, input_stream, max_dur: float, fmt: str):
@@ -144,8 +147,11 @@ def run_packager(loop: asyncio.AbstractEventLoop, conveyor_belt: asyncio.Queue, 
 
     cmd.append(target_url)
 
+    # --- REQUIREMENT 3: Log the Full Command ---
+    # We join carefully to make it readable, adding quotes if spaces exist
+    printable_cmd = " ".join([f"'{c}'" if " " in c or ";" in c else c for c in cmd])
     log(log_q, f"[PACKAGER] 🏭 Starting: {target_url}")
-    log(log_q, f"[CONFIG] Chunk: {chunk_size} | Rate: {limit_rate} | Clients: {player_clients}")
+    log(log_q, f"[COMMAND] ⌨️  {printable_cmd}")
     
     process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     
@@ -155,7 +161,13 @@ def run_packager(loop: asyncio.AbstractEventLoop, conveyor_belt: asyncio.Queue, 
 
     log(log_q, "[PACKAGER] ⏳ Waiting for stream data...")
 
+    in_container = None
+
     try:
+        # Check if process crashed immediately
+        if process.poll() is not None:
+             raise Exception(f"Process finished unexpectedly with code {process.returncode}")
+
         in_container = av.open(process.stdout, mode="r")
         in_stream = in_container.streams.audio[0]
         codec = in_stream.codec_context.name
@@ -188,9 +200,47 @@ def run_packager(loop: asyncio.AbstractEventLoop, conveyor_belt: asyncio.Queue, 
             asyncio.run_coroutine_threadsafe(conveyor_belt.put(cargo), loop)
 
     except Exception as e:
-        log(log_q, f"[PACKAGER ERROR] {e}")
+        log(log_q, f"[PACKAGER ERROR] 💥 {e}")
     finally:
-        process.kill()
+        # --- REQUIREMENT 1 & 2: Proper Stream Closure ---
+        
+        # 1. Close the AV Container
+        if in_container:
+            try:
+                in_container.close()
+                log(log_q, "[CLEANUP] 🔒 Audio container closed.")
+            except Exception:
+                pass
+        
+        # 2. Terminate the subprocess aggressively but cleanly
+        if process:
+            # Close stdout to break the pipe from the consumer side
+            if process.stdout:
+                try: 
+                    process.stdout.close()
+                except Exception: 
+                    pass
+            
+            # Close stderr
+            if process.stderr:
+                try:
+                    process.stderr.close()
+                except Exception:
+                    pass
+
+            # Handle process termination
+            if process.poll() is None:
+                log(log_q, "[CLEANUP] 🛑 Terminating downloader process...")
+                process.terminate()
+                try:
+                    process.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    log(log_q, "[CLEANUP] 🔪 Force killing downloader...")
+                    process.kill()
+            else:
+                 log(log_q, f"[CLEANUP] 🛑 Downloader exited with code {process.returncode}")
+
+        # Signal end of queue
         asyncio.run_coroutine_threadsafe(conveyor_belt.put(None), loop)
 
 # --- SHIPPER ---

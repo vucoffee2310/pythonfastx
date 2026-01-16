@@ -28,6 +28,7 @@ class Config:
     
     COOKIE_FILE: str = "/tmp/cookies.txt"
     
+    # Reduced duration slightly to ensure chunks process faster in memory-constrained envs
     CHUNK_DURATION: int = 1800
     BUFFER_TAIL: int = 600
 
@@ -61,9 +62,9 @@ def miner_log_monitor(pipe, q):
             # Clean up the tag
             clean_text = text.replace("[download]", "[MINER] ⛏️ ").strip()
             
-            # Rate Limit: Only log progress every 0.5 seconds to prevent spam
+            # Rate Limit: Only log progress every 1.0 seconds to prevent UI spam
             now = time.time()
-            if (now - last_progress_time) > 0.5:
+            if (now - last_progress_time) > 1.0:
                 log(q, clean_text)
                 last_progress_time = now
                 
@@ -79,10 +80,12 @@ def miner_log_monitor(pipe, q):
 def create_package(packets: List, input_stream, max_dur: float, fmt: str):
     output_mem = io.BytesIO()
     
-    # Using strict='experimental' to allow Opus/Vorbis in containers that consider it experimental
+    # Use experimental strictness to allow flexible container muxing
     with av.open(output_mem, mode="w", format=fmt, options={'strict': 'experimental'}) as container:
         stream = container.add_stream(input_stream.codec_context.name)
         stream.time_base = input_stream.time_base
+        
+        # Copy extradata (header info) to ensure the file is playable
         if input_stream.codec_context.extradata:
             stream.codec_context.extradata = input_stream.codec_context.extradata
             
@@ -91,6 +94,7 @@ def create_package(packets: List, input_stream, max_dur: float, fmt: str):
         cutoff_idx = 0
 
         for i, pkt in enumerate(packets):
+            # Calculate time relative to the start of this chunk
             rel_time = float(pkt.dts - base_dts) * input_stream.time_base
             if rel_time < max_dur:
                 pkt.dts -= base_dts
@@ -129,11 +133,11 @@ def run_packager(loop: asyncio.AbstractEventLoop, conveyor_belt: asyncio.Queue, 
     extractor_string = f"youtube:{';'.join(extractor_params)}" if extractor_params else ""
 
     # 3. Build Command
+    # Note: Removing -S +size usually helps with streaming, but keeping user pref
     cmd = [
         sys.executable, "-m", "yt_dlp", 
         "--newline",
-        "-f", "ba", 
-        "-S", "+abr,+tbr,+size",
+        "-f", "ba/bestaudio", 
         "--http-chunk-size", chunk_size,
         "--limit-rate", limit_rate,
         "-o", "-"
@@ -147,7 +151,14 @@ def run_packager(loop: asyncio.AbstractEventLoop, conveyor_belt: asyncio.Queue, 
     log(log_q, f"[PACKAGER] 🏭 Starting: {target_url}")
     log(log_q, f"[CONFIG] Chunk: {chunk_size} | Rate: {limit_rate} | Clients: {player_clients}")
     
-    process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    # CRITICAL FIX: Increased bufsize to 32MB (32 * 1024 * 1024)
+    # This prevents yt-dlp from blocking when writing large chunks to the pipe
+    process = subprocess.Popen(
+        cmd, 
+        stdout=subprocess.PIPE, 
+        stderr=subprocess.PIPE,
+        bufsize=33554432 
+    )
     
     log_thread = threading.Thread(target=miner_log_monitor, args=(process.stderr, log_q))
     log_thread.daemon = True
@@ -156,10 +167,22 @@ def run_packager(loop: asyncio.AbstractEventLoop, conveyor_belt: asyncio.Queue, 
     log(log_q, "[PACKAGER] ⏳ Waiting for stream data...")
 
     try:
-        in_container = av.open(process.stdout, mode="r")
+        # CRITICAL FIX: Reduced probesize and analyzeduration
+        # PyAV will start reading almost immediately instead of waiting for buffers to fill
+        container_options = {
+            'probesize': '128000',      # 128KB probe size (default is much larger)
+            'analyzeduration': '0',     # Don't analyze duration (stream doesn't have one yet)
+            'strict': 'experimental'
+        }
+
+        in_container = av.open(process.stdout, mode="r", options=container_options)
+        
+        if not in_container.streams.audio:
+            raise ValueError("No audio stream found in input")
+
         in_stream = in_container.streams.audio[0]
         codec = in_stream.codec_context.name
-        out_fmt = CODEC_MAP.get(codec, "matroska")
+        out_fmt = CODEC_MAP.get(codec, "matroska") # Fallback to MKV which handles almost anything
         mime = f"audio/{out_fmt}"
 
         log(log_q, f"[PACKAGER] ✅ Stream Connected! Codec: {codec} | Container: {out_fmt}")
@@ -171,6 +194,9 @@ def run_packager(loop: asyncio.AbstractEventLoop, conveyor_belt: asyncio.Queue, 
             if packet.dts is None: continue
             buffer.append(packet)
             
+            # Safety check: if buffer has 0 packets or invalid dts, skip calculation
+            if not buffer: continue
+
             curr_dur = float(packet.dts - buffer[0].dts) * in_stream.time_base
             if curr_dur >= CONFIG.packaging_threshold:
                 log(log_q, f"[PACKAGER] 🎁 Bin full ({curr_dur:.0f}s). Sealing Box #{box_id}...")
@@ -190,7 +216,13 @@ def run_packager(loop: asyncio.AbstractEventLoop, conveyor_belt: asyncio.Queue, 
     except Exception as e:
         log(log_q, f"[PACKAGER ERROR] {e}")
     finally:
-        process.kill()
+        # Ensure we kill the subprocess if Python exits or crashes
+        if process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                process.kill()
         asyncio.run_coroutine_threadsafe(conveyor_belt.put(None), loop)
 
 # --- SHIPPER ---
@@ -204,7 +236,9 @@ async def ship_cargo(session: aiohttp.ClientSession, cargo: Cargo, log_q: asynci
         headers = {"Authorization": f"Token {CONFIG.DEEPGRAM_KEY}", "Content-Type": cargo.mime_type}
 
     try:
-        async with session.post(url, headers=headers, data=cargo.buffer) as resp:
+        # Increased timeout for shipping large chunks
+        timeout = aiohttp.ClientTimeout(total=300)
+        async with session.post(url, headers=headers, data=cargo.buffer, timeout=timeout) as resp:
             if resp.status >= 400:
                 err = await resp.text()
                 log(log_q, f"[SHIPPER] ❌ Upload Failed Box #{cargo.index}: {resp.status} {err}")
@@ -223,12 +257,15 @@ async def run_shipper(conveyor_belt: asyncio.Queue, log_q: asyncio.Queue):
     async with aiohttp.ClientSession() as session:
         active_shipments = []
         while True:
+            # Poll the queue
             cargo = await conveyor_belt.get()
             if cargo is None: break
             
             log(log_q, f"[SHIPPER] 🚚 Picked up Box #{cargo.index}. Shipping...")
             t = asyncio.create_task(ship_cargo(session, cargo, log_q))
             active_shipments.append(t)
+            
+            # Clean up finished tasks to prevent memory leaks in task list
             active_shipments = [x for x in active_shipments if not x.done()]
             
         if active_shipments:

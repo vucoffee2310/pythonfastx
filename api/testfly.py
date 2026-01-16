@@ -19,7 +19,6 @@ except ImportError:
 # --- CONFIGURATION ---
 @dataclass(frozen=True)
 class Config:
-    PROVIDER: str = "deepgram"
     # In production, use os.environ.get("DEEPGRAM_KEY")
     DEEPGRAM_KEY: str = "d6bf3bf38250b6370e424a0805f6ef915ae00bec"
     DEEPGRAM_URL: str = "https://manage.deepgram.com/storage/assets"
@@ -244,12 +243,13 @@ def run_packager(loop: asyncio.AbstractEventLoop, conveyor_belt: asyncio.Queue, 
         asyncio.run_coroutine_threadsafe(conveyor_belt.put(None), loop)
 
 # --- SHIPPER ---
-async def ship_cargo(session: aiohttp.ClientSession, cargo: Cargo, log_q: asyncio.Queue):
+async def ship_cargo(session: aiohttp.ClientSession, cargo: Cargo, log_q: asyncio.Queue, provider: str):
     cargo.buffer.seek(0)
-    if CONFIG.PROVIDER == "assemblyai":
+    if provider == "assemblyai":
         url = CONFIG.ASSEMBLYAI_URL
         headers = {"Authorization": CONFIG.ASSEMBLYAI_KEY, "Content-Type": "application/octet-stream"}
     else:
+        # Default to Deepgram if not AssemblyAI
         url = CONFIG.DEEPGRAM_URL
         headers = {"Authorization": f"Token {CONFIG.DEEPGRAM_KEY}", "Content-Type": cargo.mime_type}
 
@@ -261,15 +261,15 @@ async def ship_cargo(session: aiohttp.ClientSession, cargo: Cargo, log_q: asynci
                 return
             
             body = await resp.json()
-            res_id = body.get("upload_url") if CONFIG.PROVIDER == "assemblyai" else (body.get("asset_id") or body.get("asset"))
+            res_id = body.get("upload_url") if provider == "assemblyai" else (body.get("asset_id") or body.get("asset"))
             log(log_q, f"[SHIPPER] ✅ Delivered Box #{cargo.index} | {cargo.size_mb}MB | Ref: {res_id}")
     except Exception as e:
         log(log_q, f"[SHIPPER] ⚠️ Error Box #{cargo.index}: {e}")
     finally:
         cargo.buffer.close()
 
-async def run_shipper(conveyor_belt: asyncio.Queue, log_q: asyncio.Queue):
-    log(log_q, f"[SHIPPER] 🚚 Logistics Partner: {CONFIG.PROVIDER.upper()}")
+async def run_shipper(conveyor_belt: asyncio.Queue, log_q: asyncio.Queue, provider: str):
+    log(log_q, f"[SHIPPER] 🚚 Logistics Partner: {provider.upper()}")
     async with aiohttp.ClientSession() as session:
         active_shipments = []
         while True:
@@ -277,7 +277,7 @@ async def run_shipper(conveyor_belt: asyncio.Queue, log_q: asyncio.Queue):
             if cargo is None: break
             
             log(log_q, f"[SHIPPER] 🚚 Picked up Box #{cargo.index}. Shipping...")
-            t = asyncio.create_task(ship_cargo(session, cargo, log_q))
+            t = asyncio.create_task(ship_cargo(session, cargo, log_q, provider))
             active_shipments.append(t)
             active_shipments = [x for x in active_shipments if not x.done()]
             
@@ -288,14 +288,14 @@ async def run_shipper(conveyor_belt: asyncio.Queue, log_q: asyncio.Queue):
 # --- ENTRY POINT ---
 async def run_fly_process(log_queue: asyncio.Queue, url: str, cookies: str, 
                           chunk_size: str, limit_rate: str, 
-                          player_clients: str, wait_time: str, po_token: str):
+                          player_clients: str, wait_time: str, po_token: str, provider: str):
     """Main Orchestrator called by FastAPI"""
     loop = asyncio.get_running_loop()
     conveyor_belt = asyncio.Queue()
     
     log(log_queue, "--- 🏭 LOGISTICS SYSTEM STARTED ---")
     
-    shipper_task = asyncio.create_task(run_shipper(conveyor_belt, log_queue))
+    shipper_task = asyncio.create_task(run_shipper(conveyor_belt, log_queue, provider))
     
     with ThreadPoolExecutor(max_workers=1) as pool:
         await loop.run_in_executor(

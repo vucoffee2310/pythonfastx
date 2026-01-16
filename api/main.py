@@ -423,17 +423,16 @@ def index():
             <div class="card">
                 <div class="form-grid">
                     <div class="full-width"><label>YouTube URL</label><input id="fly-url" placeholder="https://youtube.com/watch?v=..."></div>
-                    <div class="full-width">
-                        <label>AI Provider</label>
+                    <div><label>Chunk Size</label><input id="fly-chunk" value="8M"></div>
+                    <div><label>Limit Rate</label><input id="fly-limit" value="4M"></div>
+                    <div><label>Provider</label>
                         <select id="fly-provider">
                             <option value="assemblyai" selected>AssemblyAI</option>
                             <option value="deepgram">Deepgram</option>
                         </select>
                     </div>
-                    <div><label>Chunk Size</label><input id="fly-chunk" value="8M"></div>
-                    <div><label>Limit Rate</label><input id="fly-limit" value="4M"></div>
-                    <div><label>Player Clients</label><input id="fly-clients" value="tv,android,ios"></div>
                     <div><label>Wait Time (s)</label><input id="fly-wait" value="2"></div>
+                    <div class="full-width"><label>Player Clients</label><input id="fly-clients" value="tv,android,ios"></div>
                     <div class="full-width"><label>PO Token</label><input id="fly-token"></div>
                     <div class="full-width"><label>Cookies</label><textarea id="fly-cookies" rows="3"></textarea></div>
                     <div class="full-width"><button class="btn btn-primary" onclick="runFly()">Start Job</button></div>
@@ -643,3 +642,4 @@ def index():
 </script>
 </body>
 </html>
+    """

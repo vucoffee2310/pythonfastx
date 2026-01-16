@@ -86,11 +86,22 @@ def run_packager(loop: asyncio.AbstractEventLoop, conveyor_belt: asyncio.Queue, 
                  player_clients: str, wait_time: str, po_token: str):
     if cookies:
         try:
-            with open(CONFIG.COOKIE_FILE, "w") as f: f.write(cookies.replace(r"\n", "\n"))
+            # FIX: Properly unescape both newlines and tabs from the input string
+            formatted_cookies = cookies.replace(r"\n", "\n").replace(r"\t", "\t")
+            with open(CONFIG.COOKIE_FILE, "w") as f: f.write(formatted_cookies)
         except: pass
 
     cmd = [sys.executable, "-m", "yt_dlp", "--newline", "-f", "ba", "-o", "-", "--http-chunk-size", chunk_size, "--limit-rate", limit_rate]
     if cookies: cmd.extend(["--cookies", CONFIG.COOKIE_FILE])
+    
+    # Add extractor args
+    extractor_params = []
+    if player_clients: extractor_params.append(f"player_client={player_clients}")
+    if wait_time: extractor_params.append(f"playback_wait={wait_time}")
+    if po_token: extractor_params.append(f"po_token={po_token}")
+    if extractor_params:
+        cmd.extend(["--extractor-args", f"youtube:{';'.join(extractor_params)}"])
+
     cmd.append(target_url)
 
     process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)

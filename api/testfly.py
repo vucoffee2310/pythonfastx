@@ -84,24 +84,35 @@ def create_package(packets: List, input_stream, max_dur: float, fmt: str):
 def run_packager(loop: asyncio.AbstractEventLoop, conveyor_belt: asyncio.Queue, log_q: asyncio.Queue, 
                  target_url: str, cookies: str, chunk_size: str, limit_rate: str, 
                  player_clients: str, wait_time: str, po_token: str):
+    
+    # --- ROBUST COOKIE FIX ---
     if cookies:
         try:
-            # FIX: Properly unescape both newlines and tabs from the input string
-            formatted_cookies = cookies.replace(r"\n", "\n").replace(r"\t", "\t")
-            with open(CONFIG.COOKIE_FILE, "w") as f: f.write(formatted_cookies)
-        except: pass
+            # 1. Handle literal string escapes (user pasted from python/json dump)
+            cleaned = cookies.replace('\\n', '\n').replace('\\t', '\t')
+            # 2. Handle Carriage returns
+            cleaned = cleaned.replace('\r\n', '\n').replace('\r', '\n')
+            # 3. Filter blank lines to ensure clean Netscape format
+            valid_lines = [l.strip() for l in cleaned.split('\n') if l.strip()]
+            
+            with open(CONFIG.COOKIE_FILE, "w") as f:
+                f.write("\n".join(valid_lines) + "\n")
+            
+            log(log_q, f"[SYSTEM] 🍪 Cookies Processed ({len(valid_lines)} lines)")
+        except Exception as e:
+            log(log_q, f"[SYSTEM] ⚠️ Cookie processing warning: {e}")
 
     cmd = [sys.executable, "-m", "yt_dlp", "--newline", "-f", "ba", "-o", "-", "--http-chunk-size", chunk_size, "--limit-rate", limit_rate]
+    
     if cookies: cmd.extend(["--cookies", CONFIG.COOKIE_FILE])
     
-    # Add extractor args
+    # Handle extractor args if provided
     extractor_params = []
     if player_clients: extractor_params.append(f"player_client={player_clients}")
     if wait_time: extractor_params.append(f"playback_wait={wait_time}")
     if po_token: extractor_params.append(f"po_token={po_token}")
-    if extractor_params:
-        cmd.extend(["--extractor-args", f"youtube:{';'.join(extractor_params)}"])
-
+    if extractor_params: cmd.extend(["--extractor-args", f"youtube:{';'.join(extractor_params)}"])
+    
     cmd.append(target_url)
 
     process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -109,6 +120,10 @@ def run_packager(loop: asyncio.AbstractEventLoop, conveyor_belt: asyncio.Queue, 
 
     in_container = None
     try:
+        # Prevent PyAV from blocking indefinitely if yt-dlp fails immediately
+        if process.poll() is not None:
+            raise Exception("Downloader exited immediately (Check logs for Auth/IP errors)")
+
         in_container = av.open(process.stdout, mode="r")
         in_stream = in_container.streams.audio[0]
         out_fmt = CODEC_MAP.get(in_stream.codec_context.name, "matroska")
@@ -126,7 +141,8 @@ def run_packager(loop: asyncio.AbstractEventLoop, conveyor_belt: asyncio.Queue, 
         if buffer:
             mem_file, _, size = create_package(buffer, in_stream, float("inf"), out_fmt)
             asyncio.run_coroutine_threadsafe(conveyor_belt.put(Cargo(mem_file, box_id, f"audio/{out_fmt}", size)), loop)
-    except Exception as e: log(log_q, f"[PACKAGER ERROR] {e}")
+    except Exception as e:
+        log(log_q, f"[PACKAGER ERROR] {e}")
     finally:
         if in_container: in_container.close()
         process.terminate()

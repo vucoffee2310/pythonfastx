@@ -245,13 +245,16 @@ def run_packager(loop: asyncio.AbstractEventLoop, conveyor_belt: asyncio.Queue, 
 # --- SHIPPER ---
 async def ship_cargo(session: aiohttp.ClientSession, cargo: Cargo, log_q: asyncio.Queue, provider: str):
     cargo.buffer.seek(0)
+    
     if provider == "assemblyai":
         url = CONFIG.ASSEMBLYAI_URL
         headers = {"Authorization": CONFIG.ASSEMBLYAI_KEY, "Content-Type": "application/octet-stream"}
+        res_key_field = "upload_url"
     else:
         # Default to Deepgram if not AssemblyAI
         url = CONFIG.DEEPGRAM_URL
         headers = {"Authorization": f"Token {CONFIG.DEEPGRAM_KEY}", "Content-Type": cargo.mime_type}
+        res_key_field = "asset_id" # or "asset"
 
     try:
         async with session.post(url, headers=headers, data=cargo.buffer) as resp:
@@ -261,7 +264,12 @@ async def ship_cargo(session: aiohttp.ClientSession, cargo: Cargo, log_q: asynci
                 return
             
             body = await resp.json()
-            res_id = body.get("upload_url") if provider == "assemblyai" else (body.get("asset_id") or body.get("asset"))
+            
+            # Extract ID based on provider
+            res_id = body.get(res_key_field)
+            if not res_id and provider != "assemblyai":
+                res_id = body.get("asset")
+
             log(log_q, f"[SHIPPER] ✅ Delivered Box #{cargo.index} | {cargo.size_mb}MB | Ref: {res_id}")
     except Exception as e:
         log(log_q, f"[SHIPPER] ⚠️ Error Box #{cargo.index}: {e}")
@@ -288,7 +296,8 @@ async def run_shipper(conveyor_belt: asyncio.Queue, log_q: asyncio.Queue, provid
 # --- ENTRY POINT ---
 async def run_fly_process(log_queue: asyncio.Queue, url: str, cookies: str, 
                           chunk_size: str, limit_rate: str, 
-                          player_clients: str, wait_time: str, po_token: str, provider: str):
+                          player_clients: str, wait_time: str, po_token: str,
+                          provider: str = "assemblyai"):
     """Main Orchestrator called by FastAPI"""
     loop = asyncio.get_running_loop()
     conveyor_belt = asyncio.Queue()

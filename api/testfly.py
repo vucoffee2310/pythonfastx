@@ -122,32 +122,44 @@ def run_packager(loop: asyncio.AbstractEventLoop, conveyor_belt: asyncio.Queue, 
         except Exception as e:
             log(log_q, f"[ERROR] Failed to write cookies: {e}")
 
-    # 2. Extractor Args
-    extractor_params = []
+    # 2. Extractor Args Construction
+    # 'player_skip=webpage' is added to skip downloading the HTML page (faster startup)
+    extractor_params = ["player_skip=webpage"] 
+    
     if player_clients: extractor_params.append(f"player_client={player_clients}")
     if wait_time: extractor_params.append(f"playback_wait={wait_time}")
     if po_token: extractor_params.append(f"po_token={po_token}")
     
-    extractor_string = f"youtube:{';'.join(extractor_params)}" if extractor_params else ""
+    extractor_string = f"youtube:{';'.join(extractor_params)}"
 
-    # 3. Build Command
+    # 3. Build Command with Optimizations
     cmd = [
         sys.executable, "-m", "yt_dlp", 
-        "--newline",
-        "-f", "ba", 
-        "-S", "+abr,+tbr,+size",
+        "--newline",                    # Essential for log parsing
+        "-f", "ba",                     # Best Audio (usually Opus/WebM or AAC/M4A)
+        "-S", "+abr,+tbr,+size",        # Sort for best quality
+        
+        # --- Network / Speed Optimizations ---
+        "-4",                           # Force IPv4 (often cleaner pipe on servers)
+        "-N", "5",                      # Concurrent fragments: Downloads DASH/HLS segments in parallel (HUGE speedup)
+        "--resize-buffer",              # Start small, grow buffer as needed
+        "--no-playlist",                # Prevent accidental playlist downloading
+        "--no-mtime",                   # Don't look for file modification times
+        
+        # --- User Limits ---
         "--http-chunk-size", chunk_size,
         "--limit-rate", limit_rate,
-        "-o", "-"
+        
+        "-o", "-"                       # Output to Stdout
     ]
 
     if cookies: cmd.extend(["--cookies", CONFIG.COOKIE_FILE])
+    # extractor-args is usually "youtube:..."
     if extractor_string: cmd.extend(["--extractor-args", extractor_string])
 
     cmd.append(target_url)
 
-    # --- REQUIREMENT 3: Log the Full Command ---
-    # We join carefully to make it readable, adding quotes if spaces exist
+    # --- Log the Full Command ---
     printable_cmd = " ".join([f"'{c}'" if " " in c or ";" in c else c for c in cmd])
     log(log_q, f"[PACKAGER] 🏭 Starting: {target_url}")
     log(log_q, f"[COMMAND] ⌨️  {printable_cmd}")
@@ -201,9 +213,7 @@ def run_packager(loop: asyncio.AbstractEventLoop, conveyor_belt: asyncio.Queue, 
     except Exception as e:
         log(log_q, f"[PACKAGER ERROR] 💥 {e}")
     finally:
-        # --- REQUIREMENT 1 & 2: Proper Stream Closure ---
-        
-        # 1. Close the AV Container
+        # --- Cleanup Logic ---
         if in_container:
             try:
                 in_container.close()
@@ -211,23 +221,15 @@ def run_packager(loop: asyncio.AbstractEventLoop, conveyor_belt: asyncio.Queue, 
             except Exception:
                 pass
         
-        # 2. Terminate the subprocess aggressively but cleanly
         if process:
-            # Close stdout to break the pipe from the consumer side
             if process.stdout:
-                try: 
-                    process.stdout.close()
-                except Exception: 
-                    pass
+                try: process.stdout.close()
+                except Exception: pass
             
-            # Close stderr
             if process.stderr:
-                try:
-                    process.stderr.close()
-                except Exception:
-                    pass
+                try: process.stderr.close()
+                except Exception: pass
 
-            # Handle process termination
             if process.poll() is None:
                 log(log_q, "[CLEANUP] 🛑 Terminating downloader process...")
                 process.terminate()
@@ -254,7 +256,7 @@ async def ship_cargo(session: aiohttp.ClientSession, cargo: Cargo, log_q: asynci
         # Default to Deepgram if not AssemblyAI
         url = CONFIG.DEEPGRAM_URL
         headers = {"Authorization": f"Token {CONFIG.DEEPGRAM_KEY}", "Content-Type": cargo.mime_type}
-        res_key_field = "asset_id" # or "asset"
+        res_key_field = "asset_id"
 
     try:
         async with session.post(url, headers=headers, data=cargo.buffer) as resp:

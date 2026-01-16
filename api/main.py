@@ -203,6 +203,7 @@ class FlyRequest(BaseModel):
     wait_time: str = "2"
     player_clients: str = "tv,android,ios"
     po_token: str = ""
+    provider: str = "assemblyai"
 
 @app.post("/api/fly")
 async def fly_process(payload: FlyRequest):
@@ -210,7 +211,7 @@ async def fly_process(payload: FlyRequest):
     asyncio.create_task(testfly.run_fly_process(
         q, payload.url, payload.cookies, payload.chunk_size,
         payload.limit_rate, payload.player_clients, 
-        payload.wait_time, payload.po_token
+        payload.wait_time, payload.po_token, payload.provider
     ))
     async def log_generator():
         while True:
@@ -351,7 +352,7 @@ def index():
         .form-grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 15px; }}
         .full-width {{ grid-column: 1 / -1; }}
         label {{ display: block; color: #888; font-size: 11px; margin-bottom: 6px; font-weight: 600; }}
-        input, textarea {{ width: 100%; background: var(--bg); border: 1px solid var(--border); color: white; padding: 8px; border-radius: 4px; font-family: var(--mono); font-size: 12px; }}
+        input, textarea, select {{ width: 100%; background: var(--bg); border: 1px solid var(--border); color: white; padding: 8px; border-radius: 4px; font-family: var(--mono); font-size: 12px; }}
         .btn {{ background: var(--text); color: black; border: none; padding: 8px 16px; border-radius: 4px; font-weight: 600; cursor: pointer; }}
         .btn-primary {{ background: var(--accent); color: white; width: 100%; padding: 10px; margin-top: 10px; }}
         .modal {{ position: fixed; inset: 0; background: rgba(0,0,0,0.8); display: none; align-items: center; justify-content: center; z-index: 100; }}
@@ -422,6 +423,13 @@ def index():
             <div class="card">
                 <div class="form-grid">
                     <div class="full-width"><label>YouTube URL</label><input id="fly-url" placeholder="https://youtube.com/watch?v=..."></div>
+                    <div class="full-width">
+                        <label>AI Provider</label>
+                        <select id="fly-provider">
+                            <option value="assemblyai" selected>AssemblyAI</option>
+                            <option value="deepgram">Deepgram</option>
+                        </select>
+                    </div>
                     <div><label>Chunk Size</label><input id="fly-chunk" value="8M"></div>
                     <div><label>Limit Rate</label><input id="fly-limit" value="4M"></div>
                     <div><label>Player Clients</label><input id="fly-clients" value="tv,android,ios"></div>
@@ -611,7 +619,8 @@ def index():
             limit_rate: document.getElementById('fly-limit').value,
             wait_time: document.getElementById('fly-wait').value,
             player_clients: document.getElementById('fly-clients').value,
-            po_token: document.getElementById('fly-token').value
+            po_token: document.getElementById('fly-token').value,
+            provider: document.getElementById('fly-provider').value
         }};
         if(!payload.url) return alert("URL is required");
         out.innerText = "🚀 Job Started...\\n";
@@ -634,4 +643,3 @@ def index():
 </script>
 </body>
 </html>
-    """

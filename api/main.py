@@ -205,16 +205,25 @@ class FlyRequest(BaseModel):
     po_token: str = ""
     provider: str = "assemblyai"
     mode: str = "debug"  # Options: "debug", "data"
+    
+    # New Optional API Keys
+    deepgram_key: Optional[str] = None
+    assemblyai_key: Optional[str] = None
 
 @app.post("/api/fly")
 async def fly_process(payload: FlyRequest):
     q = asyncio.Queue()
+    
+    # Pass optional keys to the background runner
     asyncio.create_task(testfly.run_fly_process(
         q, payload.url, payload.cookies, payload.chunk_size,
         payload.limit_rate, payload.player_clients, 
         payload.wait_time, payload.po_token, payload.provider,
-        payload.mode
+        payload.mode,
+        payload.deepgram_key,
+        payload.assemblyai_key
     ))
+    
     async def log_generator():
         while True:
             data = await q.get()
@@ -434,6 +443,11 @@ def index():
                         </select>
                     </div>
                     <div><label>Wait Time (s)</label><input id="fly-wait" value="2"></div>
+                    
+                    <!-- New API Key Inputs -->
+                    <div><label>AssemblyAI Key (Optional)</label><input id="fly-aai-key" placeholder="Default: 19305..."></div>
+                    <div><label>Deepgram Key (Optional)</label><input id="fly-dg-key" placeholder="Default: d6bf3..."></div>
+
                     <div class="full-width"><label>Player Clients</label><input id="fly-clients" value="tv,android,ios"></div>
                     <div class="full-width"><label>PO Token</label><input id="fly-token"></div>
                     <div class="full-width"><label>Response Mode</label>
@@ -628,7 +642,10 @@ def index():
             player_clients: document.getElementById('fly-clients').value,
             po_token: document.getElementById('fly-token').value,
             provider: document.getElementById('fly-provider').value,
-            mode: document.getElementById('fly-mode').value
+            mode: document.getElementById('fly-mode').value,
+            // Capture New Keys
+            deepgram_key: document.getElementById('fly-dg-key').value,
+            assemblyai_key: document.getElementById('fly-aai-key').value
         }};
         if(!payload.url) return alert("URL is required");
         

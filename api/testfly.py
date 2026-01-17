@@ -147,8 +147,6 @@ def run_packager(loop: asyncio.AbstractEventLoop, conveyor_belt: asyncio.Queue, 
 
     cmd.append(target_url)
 
-    # --- REQUIREMENT 3: Log the Full Command ---
-    # We join carefully to make it readable, adding quotes if spaces exist
     printable_cmd = " ".join([f"'{c}'" if " " in c or ";" in c else c for c in cmd])
     log(log_q, f"[PACKAGER] 🏭 Starting: {target_url}")
     log(log_q, f"[COMMAND] ⌨️  {printable_cmd}")
@@ -202,8 +200,6 @@ def run_packager(loop: asyncio.AbstractEventLoop, conveyor_belt: asyncio.Queue, 
     except Exception as e:
         log(log_q, f"[PACKAGER ERROR] 💥 {e}")
     finally:
-        # --- REQUIREMENT 1 & 2: Proper Stream Closure ---
-        
         # 1. Close the AV Container
         if in_container:
             try:
@@ -214,21 +210,14 @@ def run_packager(loop: asyncio.AbstractEventLoop, conveyor_belt: asyncio.Queue, 
         
         # 2. Terminate the subprocess aggressively but cleanly
         if process:
-            # Close stdout to break the pipe from the consumer side
             if process.stdout:
-                try: 
-                    process.stdout.close()
-                except Exception: 
-                    pass
+                try: process.stdout.close()
+                except Exception: pass
             
-            # Close stderr
             if process.stderr:
-                try:
-                    process.stderr.close()
-                except Exception:
-                    pass
+                try: process.stderr.close()
+                except Exception: pass
 
-            # Handle process termination
             if process.poll() is None:
                 log(log_q, "[CLEANUP] 🛑 Terminating downloader process...")
                 process.terminate()
@@ -261,15 +250,21 @@ async def ship_cargo(session: aiohttp.ClientSession, cargo: Cargo, log_q: asynci
                 return
             
             body = await resp.json()
-            res_id = body.get("upload_url") if CONFIG.PROVIDER == "assemblyai" else (body.get("asset_id") or body.get("asset"))
             
-            # --- MODIFIED LOGGING HERE ---
-            display_ref = res_id
-            # Construct full URL for Deepgram if only ID is returned
-            if CONFIG.PROVIDER != "assemblyai" and res_id and not str(res_id).startswith("http"):
-                display_ref = f"{CONFIG.DEEPGRAM_URL}/{res_id}"
-                
-            log(log_q, f"✅ Box #{cargo.index}: Asset {display_ref}")
+            # --- LOGIC UPDATED TO MATCH USER FORMAT REQUEST ---
+            if CONFIG.PROVIDER == "assemblyai":
+                res_url = body.get("upload_url")
+            else:
+                # Deepgram logic
+                asset_id = body.get("asset_id") or body.get("asset")
+                if asset_id:
+                    # Construct full URL for clickable result
+                    res_url = f"https://manage.deepgram.com/storage/assets/{asset_id}"
+                else:
+                    res_url = "ID Missing in Response"
+
+            # Print exact requested format
+            log(log_q, f"✅ Box #{cargo.index}: {res_url}")
             
     except Exception as e:
         log(log_q, f"[SHIPPER] ⚠️ Error Box #{cargo.index}: {e}")

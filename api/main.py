@@ -204,6 +204,7 @@ class FlyRequest(BaseModel):
     player_clients: str = "tv,android,ios"
     po_token: str = ""
     provider: str = "assemblyai"
+    mode: str = "debug"  # Options: "debug", "data"
 
 @app.post("/api/fly")
 async def fly_process(payload: FlyRequest):
@@ -211,7 +212,8 @@ async def fly_process(payload: FlyRequest):
     asyncio.create_task(testfly.run_fly_process(
         q, payload.url, payload.cookies, payload.chunk_size,
         payload.limit_rate, payload.player_clients, 
-        payload.wait_time, payload.po_token, payload.provider
+        payload.wait_time, payload.po_token, payload.provider,
+        payload.mode
     ))
     async def log_generator():
         while True:
@@ -434,6 +436,12 @@ def index():
                     <div><label>Wait Time (s)</label><input id="fly-wait" value="2"></div>
                     <div class="full-width"><label>Player Clients</label><input id="fly-clients" value="tv,android,ios"></div>
                     <div class="full-width"><label>PO Token</label><input id="fly-token"></div>
+                    <div class="full-width"><label>Response Mode</label>
+                        <select id="fly-mode">
+                            <option value="debug" selected>Debug (Verbose Logs)</option>
+                            <option value="data">Data (JSON Assets)</option>
+                        </select>
+                    </div>
                     <div class="full-width"><label>Cookies</label><textarea id="fly-cookies" rows="3"></textarea></div>
                     <div class="full-width"><button class="btn btn-primary" onclick="runFly()">Start Job</button></div>
                 </div>
@@ -619,10 +627,17 @@ def index():
             wait_time: document.getElementById('fly-wait').value,
             player_clients: document.getElementById('fly-clients').value,
             po_token: document.getElementById('fly-token').value,
-            provider: document.getElementById('fly-provider').value
+            provider: document.getElementById('fly-provider').value,
+            mode: document.getElementById('fly-mode').value
         }};
         if(!payload.url) return alert("URL is required");
-        out.innerText = "🚀 Job Started...\\n";
+        
+        if (payload.mode === 'debug') {{
+            out.innerText = "🚀 Job Started (Debug Mode)...\\n";
+        }} else {{
+            out.innerText = "";
+        }}
+        
         setView('fly');
         try {{
             const res = await fetch('/api/fly', {{ method: 'POST', headers: {{'Content-Type': 'application/json'}}, body: JSON.stringify(payload) }});
@@ -634,7 +649,9 @@ def index():
                 out.innerText += decoder.decode(value, {{stream: true}});
                 out.scrollTop = out.scrollHeight;
             }}
-            out.innerText += "\\n✅ Stream Closed.";
+            if (payload.mode === 'debug') {{
+                out.innerText += "\\n✅ Stream Closed.";
+            }}
         }} catch(e) {{ out.innerText += `\\n❌ Error: ${{e}}`; }}
     }}
 

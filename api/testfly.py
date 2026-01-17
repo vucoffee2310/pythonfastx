@@ -260,8 +260,8 @@ async def ship_cargo(session: aiohttp.ClientSession, cargo: Cargo, log_q: asynci
                 res_id = body.get("asset")
 
             if mode == "data":
-                # JSON MODE: Output clean JSON with just the asset
-                log(log_q, json.dumps({"asset": res_id}))
+                # JSON MODE: Output clean JSON with index and asset
+                log(log_q, json.dumps({"index": cargo.index, "asset": res_id}))
             else:
                 # DEBUG MODE: Verbose text
                 log(log_q, f"[SHIPPER] ✅ Delivered Box #{cargo.index} | {cargo.size_mb}MB | Ref: {res_id}")

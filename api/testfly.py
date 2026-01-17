@@ -236,14 +236,14 @@ def run_packager(loop: asyncio.AbstractEventLoop, conveyor_belt: asyncio.Queue, 
 async def ship_cargo(session: aiohttp.ClientSession, cargo: Cargo, log_q: asyncio.Queue, provider: str, mode: str):
     cargo.buffer.seek(0)
     
+    # 1. Setup Request based on Provider
     if provider == "assemblyai":
         url = CONFIG.ASSEMBLYAI_URL
         headers = {"Authorization": CONFIG.ASSEMBLYAI_KEY, "Content-Type": "application/octet-stream"}
-        res_key_field = "upload_url"
     else:
+        # Deepgram
         url = CONFIG.DEEPGRAM_URL
         headers = {"Authorization": f"Token {CONFIG.DEEPGRAM_KEY}", "Content-Type": cargo.mime_type}
-        res_key_field = "asset_id"
 
     try:
         async with session.post(url, headers=headers, data=cargo.buffer) as resp:
@@ -255,12 +255,25 @@ async def ship_cargo(session: aiohttp.ClientSession, cargo: Cargo, log_q: asynci
             
             body = await resp.json()
             
-            res_id = body.get(res_key_field)
-            if not res_id and provider != "assemblyai":
-                res_id = body.get("asset")
+            # 2. Extract and Format ID based on Provider
+            res_id = None
+            
+            if provider == "assemblyai":
+                # AssemblyAI returns {"upload_url": "..."}
+                # User Requirement: Return the direct URL string
+                res_id = body.get("upload_url")
+            else:
+                # Deepgram returns {"asset_id": "..."} (or sometimes "asset")
+                # User Requirement: Return {"asset": "https://manage.deepgram.com/storage/assets/..."}
+                # We construct the full URL here.
+                raw_id = body.get("asset_id") or body.get("asset")
+                if raw_id:
+                    # Construct full URL matching the config base
+                    res_id = f"{CONFIG.DEEPGRAM_URL}/{raw_id}"
 
             if mode == "data":
-                # JSON MODE: Output clean JSON with index and asset
+                # JSON MODE: Output clean JSON with index and the formatted asset URL
+                # The 'asset' key will now contain the Full URL for Deepgram or Assembly
                 log(log_q, json.dumps({"index": cargo.index, "asset": res_id}))
             else:
                 # DEBUG MODE: Verbose text

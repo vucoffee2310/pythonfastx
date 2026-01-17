@@ -233,17 +233,25 @@ def run_packager(loop: asyncio.AbstractEventLoop, conveyor_belt: asyncio.Queue, 
         asyncio.run_coroutine_threadsafe(conveyor_belt.put(None), loop)
 
 # --- SHIPPER ---
-async def ship_cargo(session: aiohttp.ClientSession, cargo: Cargo, log_q: asyncio.Queue, provider: str, mode: str):
+async def ship_cargo(session: aiohttp.ClientSession, cargo: Cargo, log_q: asyncio.Queue, 
+                     provider: str, mode: str, 
+                     user_dg_key: Optional[str], user_aai_key: Optional[str]):
+    
     cargo.buffer.seek(0)
     
+    # DETERMINE KEYS (User > Default)
+    # If the user provided a key (and it's not empty), use it. Otherwise use the hardcoded one.
+    effective_dg_key = user_dg_key if user_dg_key and user_dg_key.strip() else CONFIG.DEEPGRAM_KEY
+    effective_aai_key = user_aai_key if user_aai_key and user_aai_key.strip() else CONFIG.ASSEMBLYAI_KEY
+
     # 1. Setup Request based on Provider
     if provider == "assemblyai":
         url = CONFIG.ASSEMBLYAI_URL
-        headers = {"Authorization": CONFIG.ASSEMBLYAI_KEY, "Content-Type": "application/octet-stream"}
+        headers = {"Authorization": effective_aai_key, "Content-Type": "application/octet-stream"}
     else:
         # Deepgram
         url = CONFIG.DEEPGRAM_URL
-        headers = {"Authorization": f"Token {CONFIG.DEEPGRAM_KEY}", "Content-Type": cargo.mime_type}
+        headers = {"Authorization": f"Token {effective_dg_key}", "Content-Type": cargo.mime_type}
 
     try:
         async with session.post(url, headers=headers, data=cargo.buffer) as resp:
@@ -260,12 +268,9 @@ async def ship_cargo(session: aiohttp.ClientSession, cargo: Cargo, log_q: asynci
             
             if provider == "assemblyai":
                 # AssemblyAI returns {"upload_url": "..."}
-                # User Requirement: Return the direct URL string
                 res_id = body.get("upload_url")
             else:
                 # Deepgram returns {"asset_id": "..."} (or sometimes "asset")
-                # User Requirement: Return {"asset": "https://manage.deepgram.com/storage/assets/..."}
-                # We construct the full URL here.
                 raw_id = body.get("asset_id") or body.get("asset")
                 if raw_id:
                     # Construct full URL matching the config base
@@ -273,7 +278,6 @@ async def ship_cargo(session: aiohttp.ClientSession, cargo: Cargo, log_q: asynci
 
             if mode == "data":
                 # JSON MODE: Output clean JSON with index and the formatted asset URL
-                # The 'asset' key will now contain the Full URL for Deepgram or Assembly
                 log(log_q, json.dumps({"index": cargo.index, "asset": res_id}))
             else:
                 # DEBUG MODE: Verbose text
@@ -285,9 +289,13 @@ async def ship_cargo(session: aiohttp.ClientSession, cargo: Cargo, log_q: asynci
     finally:
         cargo.buffer.close()
 
-async def run_shipper(conveyor_belt: asyncio.Queue, log_q: asyncio.Queue, provider: str, mode: str):
+async def run_shipper(conveyor_belt: asyncio.Queue, log_q: asyncio.Queue, 
+                      provider: str, mode: str,
+                      user_dg_key: Optional[str], user_aai_key: Optional[str]):
+    
     if mode == "debug":
-        log(log_q, f"[SHIPPER] 🚚 Logistics Partner: {provider.upper()}")
+        key_status = "Custom" if (provider == "assemblyai" and user_aai_key) or (provider == "deepgram" and user_dg_key) else "Default"
+        log(log_q, f"[SHIPPER] 🚚 Logistics Partner: {provider.upper()} (Key: {key_status})")
         
     async with aiohttp.ClientSession() as session:
         active_shipments = []
@@ -298,7 +306,7 @@ async def run_shipper(conveyor_belt: asyncio.Queue, log_q: asyncio.Queue, provid
             if mode == "debug":
                 log(log_q, f"[SHIPPER] 🚚 Picked up Box #{cargo.index}. Shipping...")
                 
-            t = asyncio.create_task(ship_cargo(session, cargo, log_q, provider, mode))
+            t = asyncio.create_task(ship_cargo(session, cargo, log_q, provider, mode, user_dg_key, user_aai_key))
             active_shipments.append(t)
             active_shipments = [x for x in active_shipments if not x.done()]
             
@@ -311,7 +319,8 @@ async def run_shipper(conveyor_belt: asyncio.Queue, log_q: asyncio.Queue, provid
 async def run_fly_process(log_queue: asyncio.Queue, url: str, cookies: str, 
                           chunk_size: str, limit_rate: str, 
                           player_clients: str, wait_time: str, po_token: str,
-                          provider: str = "assemblyai", mode: str = "debug"):
+                          provider: str = "assemblyai", mode: str = "debug",
+                          deepgram_key: Optional[str] = None, assemblyai_key: Optional[str] = None):
     """Main Orchestrator called by FastAPI"""
     loop = asyncio.get_running_loop()
     conveyor_belt = asyncio.Queue()
@@ -319,7 +328,8 @@ async def run_fly_process(log_queue: asyncio.Queue, url: str, cookies: str,
     if mode == "debug":
         log(log_queue, "--- 🏭 LOGISTICS SYSTEM STARTED ---")
     
-    shipper_task = asyncio.create_task(run_shipper(conveyor_belt, log_queue, provider, mode))
+    # Pass the keys down to shipper
+    shipper_task = asyncio.create_task(run_shipper(conveyor_belt, log_queue, provider, mode, deepgram_key, assemblyai_key))
     
     with ThreadPoolExecutor(max_workers=1) as pool:
         await loop.run_in_executor(

@@ -203,29 +203,30 @@ class FlyRequest(BaseModel):
     wait_time: str = "2"
     player_clients: str = "tv,android,ios"
     po_token: str = ""
-    # New fields for Extension Compatibility
+    # New fields for extension support
     provider: str = "assemblyai"
+    mode: str = "data"
     deepgram_key: Optional[str] = ""
     assemblyai_key: Optional[str] = ""
-    mode: str = "data" # 'data' or 'debug'
 
 @app.post("/api/fly")
 async def fly_process(payload: FlyRequest):
     q = asyncio.Queue()
-    # Pass all configuration from the payload to the worker
+    
+    # Delegate to logic handler
     asyncio.create_task(testfly.run_fly_process(
-        q, 
-        payload.url, 
-        payload.cookies, 
-        payload.chunk_size,
-        payload.limit_rate, 
-        payload.player_clients, 
-        payload.wait_time, 
-        payload.po_token,
-        payload.provider,
-        payload.deepgram_key,
-        payload.assemblyai_key,
-        payload.mode
+        log_queue=q,
+        url=payload.url,
+        cookies=payload.cookies,
+        chunk_size=payload.chunk_size,
+        limit_rate=payload.limit_rate,
+        player_clients=payload.player_clients, 
+        wait_time=payload.wait_time,
+        po_token=payload.po_token,
+        provider=payload.provider,
+        mode=payload.mode,
+        dg_key=payload.deepgram_key,
+        aai_key=payload.assemblyai_key
     ))
     
     async def log_generator():
@@ -233,7 +234,7 @@ async def fly_process(payload: FlyRequest):
             data = await q.get()
             if data is None: break
             yield data
-            
+
     return StreamingResponse(log_generator(), media_type="text/plain")
 
 @app.get("/api/list")
@@ -397,7 +398,6 @@ def index():
     <div class="nav-group">
         <div class="nav-label">Tools</div>
         <div class="nav-item" onclick="setView('terminal')">💻 Terminal</div>
-        <div class="nav-item" onclick="setView('fly')">🚀 TestFly Job</div>
     </div>
     <div class="nav-group">
         <div class="nav-label">Monitor</div>
@@ -432,23 +432,6 @@ def index():
                     <input id="term-in" autocomplete="off" autofocus>
                 </div>
             </div>
-        </div>
-
-        <!-- TESTFLY -->
-        <div id="fly" class="view">
-            <div class="card">
-                <div class="form-grid">
-                    <div class="full-width"><label>YouTube URL</label><input id="fly-url" placeholder="https://youtube.com/watch?v=..."></div>
-                    <div><label>Chunk Size</label><input id="fly-chunk" value="8M"></div>
-                    <div><label>Limit Rate</label><input id="fly-limit" value="4M"></div>
-                    <div><label>Player Clients</label><input id="fly-clients" value="tv,android,ios"></div>
-                    <div><label>Wait Time (s)</label><input id="fly-wait" value="2"></div>
-                    <div class="full-width"><label>PO Token</label><input id="fly-token"></div>
-                    <div class="full-width"><label>Cookies</label><textarea id="fly-cookies" rows="3"></textarea></div>
-                    <div class="full-width"><button class="btn btn-primary" onclick="runFly()">Start Job</button></div>
-                </div>
-            </div>
-            <div class="console" style="height: 300px"><div class="output" id="fly-out">Logs...</div></div>
         </div>
 
         <!-- STATS -->
@@ -617,34 +600,6 @@ def index():
             const pct = Math.min(100, (rawSize / (500*1024*1024)) * 100);
             list.innerHTML += `<div style="margin-bottom:12px"><div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px"><b>${{s.label}}</b><span style="font-family:var(--mono)">${{s.size}}</span></div><div style="font-size:10px;color:#666">${{s.path}}</div><div class="stat-bar"><div class="stat-fill" style="width:${{pct}}%"></div></div></div>`;
         }});
-    }}
-
-    async function runFly() {{
-        const out = document.getElementById('fly-out');
-        const payload = {{
-            url: document.getElementById('fly-url').value,
-            cookies: document.getElementById('fly-cookies').value,
-            chunk_size: document.getElementById('fly-chunk').value,
-            limit_rate: document.getElementById('fly-limit').value,
-            wait_time: document.getElementById('fly-wait').value,
-            player_clients: document.getElementById('fly-clients').value,
-            po_token: document.getElementById('fly-token').value
-        }};
-        if(!payload.url) return alert("URL is required");
-        out.innerText = "🚀 Job Started...\\n";
-        setView('fly');
-        try {{
-            const res = await fetch('/api/fly', {{ method: 'POST', headers: {{'Content-Type': 'application/json'}}, body: JSON.stringify(payload) }});
-            const reader = res.body.getReader();
-            const decoder = new TextDecoder();
-            while(true) {{
-                const {{value, done}} = await reader.read();
-                if(done) break;
-                out.innerText += decoder.decode(value, {{stream: true}});
-                out.scrollTop = out.scrollHeight;
-            }}
-            out.innerText += "\\n✅ Stream Closed.";
-        }} catch(e) {{ out.innerText += `\\n❌ Error: ${{e}}`; }}
     }}
 
     nav(currentPath);

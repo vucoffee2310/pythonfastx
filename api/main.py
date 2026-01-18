@@ -1,6 +1,6 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse, FileResponse, StreamingResponse
-from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.cors import CORSMiddleware  # <--- ADDED
 from pydantic import BaseModel
 import os
 import sys
@@ -10,6 +10,7 @@ import platform
 import shutil
 import json
 from typing import Optional, Dict, List
+from . import testfly
 
 # ========================================================
 # 1. SETUP & PATH CONFIGURATION
@@ -52,17 +53,12 @@ try:
 except Exception as e:
     av_status = f"❌ PyAV Error: {e}"
 
-try:
-    from . import testfly
-except ImportError:
-    import testfly
-
 app = FastAPI()
 
-# --- CORS MIDDLEWARE (REQUIRED FOR EXTENSION) ---
+# --- CORS MIDDLEWARE (ESSENTIAL FOR CHROME EXTENSION) ---
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allows all origins
+    allow_origins=["*"],  # In production, replace with ["chrome-extension://<YOUR_ID>"]
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -100,29 +96,22 @@ def load_build_fs_cache():
                         BUILD_FS_CACHE[current_path] = []
                     continue
 
-                while len(dir_stack) > depth:
-                    dir_stack.pop()
-                
+                while len(dir_stack) > depth: dir_stack.pop()
                 parent_path = dir_stack[-1]
-                abs_path = f"/{name}" if parent_path == "/" else f"{parent_path}/{name}"
+                if parent_path == "/": abs_path = f"/{name}"
+                else: abs_path = f"{parent_path}/{name}"
                 
-                if parent_path not in BUILD_FS_CACHE:
-                    BUILD_FS_CACHE[parent_path] = []
+                if parent_path not in BUILD_FS_CACHE: BUILD_FS_CACHE[parent_path] = []
                 
                 BUILD_FS_CACHE[parent_path].append({
-                    "name": name,
-                    "path": abs_path,
-                    "is_dir": is_dir,
-                    "size": "-",
+                    "name": name, "path": abs_path, "is_dir": is_dir, "size": "-",
                     "ext": os.path.splitext(name)[1].lower() if not is_dir else ""
                 })
                 
                 if is_dir:
                     dir_stack.append(abs_path)
-                    if abs_path not in BUILD_FS_CACHE:
-                        BUILD_FS_CACHE[abs_path] = []
-    except Exception as e:
-        print(f"Error loading tree index: {e}")
+                    if abs_path not in BUILD_FS_CACHE: BUILD_FS_CACHE[abs_path] = []
+    except Exception as e: print(f"Error loading tree index: {e}")
 
 load_build_fs_cache()
 
@@ -137,15 +126,10 @@ def get_size_str(path):
     return get_human_size(total)
 
 def get_runtime_env_info():
-    info = {
-        "python": sys.version.split()[0],
-        "platform": platform.platform(),
-        "glibc": platform.libc_ver()[1]
-    }
+    info = { "python": sys.version.split()[0], "platform": platform.platform(), "glibc": platform.libc_ver()[1] }
     try:
         if os.path.exists("/etc/os-release"):
-            with open("/etc/os-release") as f:
-                info["os"] = f.read().splitlines()[0].replace('"', '')
+            with open("/etc/os-release") as f: info["os"] = f.read().splitlines()[0].replace('"', '')
         else: info["os"] = "Unknown OS"
     except: info["os"] = "Error reading OS"
     return info
@@ -156,33 +140,23 @@ def compare_tools():
         try:
             with open(paths["build_tools"], 'r') as f: build_data = json.load(f)
         except: pass
-    
     tool_list = list(build_data.keys()) if build_data else ['tree', 'jq', 'curl', 'git', 'python3']
     comparison = []
-    
     for tool in tool_list:
         build_path = build_data.get(tool)
         runtime_path = shutil.which(tool)
         status = "Unknown"
-        if build_path and runtime_path:
-            status = "✅ Same Path" if build_path == runtime_path else "⚠️ Path Changed"
+        if build_path and runtime_path: status = "✅ Same Path" if build_path == runtime_path else "⚠️ Path Changed"
         elif build_path and not runtime_path: status = "❌ Missing in Runtime"
         elif not build_path and runtime_path: status = "✨ New in Runtime"
         else: status = "⛔ Not Available"
-            
-        comparison.append({
-            "name": tool,
-            "build": build_path or "-",
-            "runtime": runtime_path or "-",
-            "status": status
-        })
+        comparison.append({ "name": tool, "build": build_path or "-", "runtime": runtime_path or "-", "status": status })
     return comparison
 
 def get_python_inodes():
     if os.path.exists(paths["build_inodes"]):
         try:
-            with open(paths["build_inodes"], 'r') as f:
-                return json.load(f)
+            with open(paths["build_inodes"], 'r') as f: return json.load(f)
         except: pass
     return []
 
@@ -197,7 +171,6 @@ class FlyRequest(BaseModel):
     wait_time: str = "2"
     player_clients: str = "tv,android,ios"
     po_token: str = ""
-    # Extension Support
     provider: str = "assemblyai"
     mode: str = "debug"
     deepgram_key: Optional[str] = ""
@@ -206,36 +179,35 @@ class FlyRequest(BaseModel):
 @app.post("/api/fly")
 async def fly_process(payload: FlyRequest):
     q = asyncio.Queue()
+    
     asyncio.create_task(testfly.run_fly_process(
-        q, 
-        payload.url, 
-        payload.cookies, 
-        payload.chunk_size,
-        payload.limit_rate, 
-        payload.player_clients, 
-        payload.wait_time, 
-        payload.po_token,
-        payload.provider,
-        payload.mode,
-        payload.deepgram_key,
-        payload.assemblyai_key
+        log_queue=q,
+        url=payload.url,
+        cookies=payload.cookies,
+        chunk_size=payload.chunk_size,
+        limit_rate=payload.limit_rate,
+        player_clients=payload.player_clients, 
+        wait_time=payload.wait_time,
+        po_token=payload.po_token,
+        provider=payload.provider,
+        mode=payload.mode,
+        dg_key=payload.deepgram_key,
+        aai_key=payload.assemblyai_key
     ))
+    
     async def log_generator():
         while True:
             data = await q.get()
             if data is None: break
             yield data
+
     return StreamingResponse(log_generator(), media_type="text/plain")
 
 @app.get("/api/list")
 def list_files(path: str = "/", source: str = "runtime"):
-    if source == "runtime":
-        path = os.path.abspath(path)
-    
+    if source == "runtime": path = os.path.abspath(path)
     if source == "build":
-        lookup_path = path
-        if len(lookup_path) > 1 and lookup_path.endswith('/'):
-            lookup_path = lookup_path.rstrip('/')
+        lookup_path = path.rstrip('/') if len(path) > 1 and path.endswith('/') else path
         items = BUILD_FS_CACHE.get(lookup_path, [])
         return {"current_path": path, "items": items, "source": "build"}
 
@@ -246,9 +218,7 @@ def list_files(path: str = "/", source: str = "runtime"):
             for e in sorted(entries, key=lambda x: (not x.is_dir(), x.name.lower())):
                 try:
                     items.append({
-                        "name": e.name, 
-                        "path": e.path, 
-                        "is_dir": e.is_dir(),
+                        "name": e.name, "path": e.path, "is_dir": e.is_dir(),
                         "size": get_size_str(e.path) if not e.is_dir() else "-",
                         "ext": os.path.splitext(e.name)[1].lower() if not e.is_dir() else ""
                     })
@@ -260,10 +230,7 @@ def list_files(path: str = "/", source: str = "runtime"):
 def run_shell(cmd: str):
     if not cmd: return {"out": ""}
     try:
-        res = subprocess.run(
-            cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-            text=True, timeout=10, cwd=project_root, env=os.environ
-        )
+        res = subprocess.run(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=10, cwd=project_root, env=os.environ)
         return {"out": res.stdout}
     except subprocess.TimeoutExpired: return {"out": "⚠️ Command timed out."}
     except Exception as e: return {"out": str(e)}
@@ -273,27 +240,20 @@ def stats_endpoint():
     stats = []
     locations = [("App Code", paths["root"]), ("Dependencies", paths["vendor"]), ("Binaries", paths["bin"]), ("Temp", "/tmp")]
     for label, path in locations:
-        if os.path.exists(path):
-            stats.append({"label": label, "path": path, "size": get_size_str(path)})
-    
+        if os.path.exists(path): stats.append({"label": label, "path": path, "size": get_size_str(path)})
     return {
-        "storage": stats, 
-        "av": av_status,
-        "runtime": get_runtime_env_info(),
-        "tools": compare_tools(),
-        "inodes": get_python_inodes(),
-        "has_build_index": bool(BUILD_FS_CACHE)
+        "storage": stats, "av": av_status, "runtime": get_runtime_env_info(),
+        "tools": compare_tools(), "inodes": get_python_inodes(), "has_build_index": bool(BUILD_FS_CACHE)
     }
 
 @app.get("/api/view")
 def view_file(path: str):
-    if not os.path.exists(path): return {"error": "File not found (Runtime)"}
+    if not os.path.exists(path): return {"error": "File not found"}
     try:
-        if os.path.getsize(path) > 500_000: return {"error": "File too large to preview."}
+        if os.path.getsize(path) > 500_000: return {"error": "File too large"}
         with open(path, 'rb') as f:
-            if b'\x00' in f.read(1024): return {"error": "Binary file detected."}
-        with open(path, 'r', encoding='utf-8', errors='replace') as f:
-            return {"content": f.read()}
+            if b'\x00' in f.read(1024): return {"error": "Binary file"}
+        with open(path, 'r', encoding='utf-8', errors='replace') as f: return {"content": f.read()}
     except Exception as e: return {"error": str(e)}
 
 @app.get("/api/delete")
@@ -309,7 +269,7 @@ def download(path: str):
     if os.path.exists(path): return FileResponse(path, filename=os.path.basename(path))
 
 # ========================================================
-# 5. UI
+# 5. UI (Same as before)
 # ========================================================
 @app.get("/", response_class=HTMLResponse)
 def index():
@@ -445,7 +405,7 @@ def index():
                         </select>
                     </div>
 
-                    <div class="full-width"><label>API Key (Deepgram or AssemblyAI)</label><input id="fly-key" placeholder="Paste your API Key here"></div>
+                    <div class="full-width"><label>API Key (Optional if Env Var set)</label><input id="fly-key" placeholder="Paste your API Key here"></div>
                     <div class="full-width"><label>PO Token</label><input id="fly-token"></div>
                     <div class="full-width"><label>Cookies (Netscape format)</label><textarea id="fly-cookies" rows="3"></textarea></div>
                     
@@ -664,3 +624,4 @@ def index():
 </script>
 </body>
 </html>
+    """

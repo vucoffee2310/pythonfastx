@@ -1,6 +1,5 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse, FileResponse, StreamingResponse
-from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import os
 import sys
@@ -59,15 +58,6 @@ except ImportError:
 
 app = FastAPI()
 
-# --- CORS MIDDLEWARE (REQUIRED FOR CHROME EXTENSION) ---
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
 # ========================================================
 # 3. HELPER FUNCTIONS & CACHE
 # ========================================================
@@ -81,43 +71,67 @@ def get_human_size(size_bytes):
     return f"{size_bytes:.2f} TB"
 
 def load_build_fs_cache():
+    """Parses ultra-minimal indented tree format (name only)."""
     if not os.path.exists(paths["build_index"]): return
+    
     try:
         dir_stack = [] 
+
         with open(paths["build_index"], 'r', encoding='utf-8') as f:
             for line in f:
+                # 1. Parse Indentation (Depth)
                 stripped = line.lstrip(' ')
                 if not stripped: continue
+                
                 content = stripped.rstrip('\n')
                 depth = len(line) - len(stripped)
+                
+                # 2. Determine Type
                 is_dir = content.endswith('/')
                 name = content.rstrip('/')
                 
+                # 3. Handle Root
                 if depth == 0:
                     current_path = "/" if name == "" else name
                     dir_stack = [current_path]
-                    if current_path not in BUILD_FS_CACHE: BUILD_FS_CACHE[current_path] = []
+                    if current_path not in BUILD_FS_CACHE:
+                        BUILD_FS_CACHE[current_path] = []
                     continue
 
-                while len(dir_stack) > depth: dir_stack.pop()
+                # 4. Sync Stack
+                while len(dir_stack) > depth:
+                    dir_stack.pop()
+                
                 parent_path = dir_stack[-1]
+                
                 if parent_path == "/": abs_path = f"/{name}"
                 else: abs_path = f"{parent_path}/{name}"
                 
-                if parent_path not in BUILD_FS_CACHE: BUILD_FS_CACHE[parent_path] = []
+                # 5. Add to Cache
+                if parent_path not in BUILD_FS_CACHE:
+                    BUILD_FS_CACHE[parent_path] = []
+                
                 BUILD_FS_CACHE[parent_path].append({
-                    "name": name, "path": abs_path, "is_dir": is_dir, "size": "-",
+                    "name": name,
+                    "path": abs_path,
+                    "is_dir": is_dir,
+                    "size": "-",
                     "ext": os.path.splitext(name)[1].lower() if not is_dir else ""
                 })
                 
                 if is_dir:
                     dir_stack.append(abs_path)
-                    if abs_path not in BUILD_FS_CACHE: BUILD_FS_CACHE[abs_path] = []
-    except Exception as e: print(f"Error loading tree index: {e}")
+                    if abs_path not in BUILD_FS_CACHE:
+                        BUILD_FS_CACHE[abs_path] = []
+            
+    except Exception as e:
+        print(f"Error loading tree index: {e}")
 
+# Load on startup
 load_build_fs_cache()
 
 def get_size_str(path):
+    """Realtime size check"""
     total = 0
     try:
         if os.path.isfile(path): total = os.path.getsize(path)
@@ -128,10 +142,15 @@ def get_size_str(path):
     return get_human_size(total)
 
 def get_runtime_env_info():
-    info = {"python": sys.version.split()[0], "platform": platform.platform(), "glibc": platform.libc_ver()[1]}
+    info = {
+        "python": sys.version.split()[0],
+        "platform": platform.platform(),
+        "glibc": platform.libc_ver()[1]
+    }
     try:
         if os.path.exists("/etc/os-release"):
-            with open("/etc/os-release") as f: info["os"] = f.read().splitlines()[0].replace('"', '')
+            with open("/etc/os-release") as f:
+                info["os"] = f.read().splitlines()[0].replace('"', '')
         else: info["os"] = "Unknown OS"
     except: info["os"] = "Error reading OS"
     return info
@@ -145,21 +164,31 @@ def compare_tools():
     
     tool_list = list(build_data.keys()) if build_data else ['tree', 'jq', 'curl', 'git', 'python3']
     comparison = []
+    
     for tool in tool_list:
         build_path = build_data.get(tool)
         runtime_path = shutil.which(tool)
+        
         status = "Unknown"
-        if build_path and runtime_path: status = "✅ Same Path" if build_path == runtime_path else "⚠️ Path Changed"
+        if build_path and runtime_path:
+            status = "✅ Same Path" if build_path == runtime_path else "⚠️ Path Changed"
         elif build_path and not runtime_path: status = "❌ Missing in Runtime"
         elif not build_path and runtime_path: status = "✨ New in Runtime"
         else: status = "⛔ Not Available"
-        comparison.append({"name": tool, "build": build_path or "-", "runtime": runtime_path or "-", "status": status})
+            
+        comparison.append({
+            "name": tool,
+            "build": build_path or "-",
+            "runtime": runtime_path or "-",
+            "status": status
+        })
     return comparison
 
 def get_python_inodes():
     if os.path.exists(paths["build_inodes"]):
         try:
-            with open(paths["build_inodes"], 'r') as f: return json.load(f)
+            with open(paths["build_inodes"], 'r') as f:
+                return json.load(f)
         except: pass
     return []
 
@@ -174,28 +203,14 @@ class FlyRequest(BaseModel):
     wait_time: str = "2"
     player_clients: str = "tv,android,ios"
     po_token: str = ""
-    # --- New Fields for Extension Integration ---
-    provider: str = "assemblyai"
-    deepgram_key: Optional[str] = ""
-    assemblyai_key: Optional[str] = ""
-    mode: Optional[str] = "data"
 
 @app.post("/api/fly")
 async def fly_process(payload: FlyRequest):
     q = asyncio.Queue()
     asyncio.create_task(testfly.run_fly_process(
-        q, 
-        payload.url, 
-        payload.cookies, 
-        payload.chunk_size,
-        payload.limit_rate, 
-        payload.player_clients, 
-        payload.wait_time, 
-        payload.po_token,
-        # Pass dynamic config to testfly
-        payload.provider,
-        payload.deepgram_key,
-        payload.assemblyai_key
+        q, payload.url, payload.cookies, payload.chunk_size,
+        payload.limit_rate, payload.player_clients, 
+        payload.wait_time, payload.po_token
     ))
     async def log_generator():
         while True:
@@ -206,12 +221,20 @@ async def fly_process(payload: FlyRequest):
 
 @app.get("/api/list")
 def list_files(path: str = "/", source: str = "runtime"):
-    if source == "runtime": path = os.path.abspath(path)
+    # Normalize path
+    if source == "runtime":
+        path = os.path.abspath(path)
+    
     if source == "build":
-        lookup_path = path.rstrip('/') if len(path) > 1 and path.endswith('/') else path
+        # Ensure path has no trailing slash (unless root) to match cache keys
+        lookup_path = path
+        if len(lookup_path) > 1 and lookup_path.endswith('/'):
+            lookup_path = lookup_path.rstrip('/')
+            
         items = BUILD_FS_CACHE.get(lookup_path, [])
         return {"current_path": path, "items": items, "source": "build"}
 
+    # Default: Runtime
     if not os.path.exists(path): raise HTTPException(404, "Path not found")
     items = []
     try:
@@ -219,7 +242,9 @@ def list_files(path: str = "/", source: str = "runtime"):
             for e in sorted(entries, key=lambda x: (not x.is_dir(), x.name.lower())):
                 try:
                     items.append({
-                        "name": e.name, "path": e.path, "is_dir": e.is_dir(),
+                        "name": e.name, 
+                        "path": e.path, 
+                        "is_dir": e.is_dir(),
                         "size": get_size_str(e.path) if not e.is_dir() else "-",
                         "ext": os.path.splitext(e.name)[1].lower() if not e.is_dir() else ""
                     })
@@ -244,15 +269,21 @@ def stats_endpoint():
     stats = []
     locations = [("App Code", paths["root"]), ("Dependencies", paths["vendor"]), ("Binaries", paths["bin"]), ("Temp", "/tmp")]
     for label, path in locations:
-        if os.path.exists(path): stats.append({"label": label, "path": path, "size": get_size_str(path)})
+        if os.path.exists(path):
+            stats.append({"label": label, "path": path, "size": get_size_str(path)})
     
     return {
-        "storage": stats, "av": av_status, "runtime": get_runtime_env_info(),
-        "tools": compare_tools(), "inodes": get_python_inodes(), "has_build_index": bool(BUILD_FS_CACHE)
+        "storage": stats, 
+        "av": av_status,
+        "runtime": get_runtime_env_info(),
+        "tools": compare_tools(),
+        "inodes": get_python_inodes(),
+        "has_build_index": bool(BUILD_FS_CACHE)
     }
 
 @app.get("/api/view")
 def view_file(path: str):
+    # Only view runtime files
     if not os.path.exists(path): return {"error": "File not found (Runtime)"}
     try:
         if os.path.getsize(path) > 500_000: return {"error": "File too large to preview."}
@@ -275,7 +306,7 @@ def download(path: str):
     if os.path.exists(path): return FileResponse(path, filename=os.path.basename(path))
 
 # ========================================================
-# 5. UI (Keep same UI as provided in original prompt)
+# 5. UI
 # ========================================================
 @app.get("/", response_class=HTMLResponse)
 def index():
@@ -397,9 +428,6 @@ def index():
                     <div><label>Wait Time (s)</label><input id="fly-wait" value="2"></div>
                     <div class="full-width"><label>PO Token</label><input id="fly-token"></div>
                     <div class="full-width"><label>Cookies</label><textarea id="fly-cookies" rows="3"></textarea></div>
-                    <!-- Added inputs for consistency, though UI is primarily for manual testing -->
-                    <div><label>Provider</label><input id="fly-provider" value="assemblyai"></div>
-                    <div><label>API Key</label><input id="fly-key" placeholder="Optional for UI"></div>
                     <div class="full-width"><button class="btn btn-primary" onclick="runFly()">Start Job</button></div>
                 </div>
             </div>
@@ -576,9 +604,6 @@ def index():
 
     async function runFly() {{
         const out = document.getElementById('fly-out');
-        const provider = document.getElementById('fly-provider').value;
-        const key = document.getElementById('fly-key').value;
-        
         const payload = {{
             url: document.getElementById('fly-url').value,
             cookies: document.getElementById('fly-cookies').value,
@@ -586,10 +611,7 @@ def index():
             limit_rate: document.getElementById('fly-limit').value,
             wait_time: document.getElementById('fly-wait').value,
             player_clients: document.getElementById('fly-clients').value,
-            po_token: document.getElementById('fly-token').value,
-            provider: provider,
-            deepgram_key: provider === 'deepgram' ? key : '',
-            assemblyai_key: provider === 'assemblyai' ? key : ''
+            po_token: document.getElementById('fly-token').value
         }};
         if(!payload.url) return alert("URL is required");
         out.innerText = "🚀 Job Started...\\n";

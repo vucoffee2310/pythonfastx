@@ -212,7 +212,6 @@ class FlyRequest(BaseModel):
 async def fly_process(payload: FlyRequest):
     q = asyncio.Queue()
     
-    # Pass all relevant fields to the processor
     asyncio.create_task(testfly.run_fly_process(
         q, 
         url=payload.url, 

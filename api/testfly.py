@@ -264,12 +264,16 @@ async def ship_cargo(session: aiohttp.ClientSession, cargo: Cargo, log_q: asynci
             # Identify the resulting asset ID/URL based on provider
             res_asset = ""
             if config.PROVIDER == "assemblyai":
+                # AssemblyAI returns the full URL in 'upload_url'
+                # Format: https://cdn.assemblyai.com/upload/hash/id
                 res_asset = body.get("upload_url", "")
-            else:
-                # Deepgram returns either asset_id or asset struct. 
-                # For compatibility with extension which expects a URL to 'transcribe', 
-                # we return the 'name' if explicit URL isn't returned, or the upload struct.
-                res_asset = body.get("url") or body.get("asset_id") or unique_filename
+            elif config.PROVIDER == "deepgram":
+                # Deepgram returns 'asset_id'
+                # User requested format: https://manage.deepgram.com/storage/assets + hash
+                asset_id = body.get("asset_id")
+                # Remove query params from base URL if any for clean concatenation
+                base_clean = config.DEEPGRAM_URL.split('?')[0].rstrip('/')
+                res_asset = f"{base_clean}/{asset_id}"
 
             # JSON Log for Extension Parsing
             success_payload = {

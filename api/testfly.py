@@ -6,7 +6,6 @@ import aiohttp
 import threading
 import os
 import time
-import json
 from typing import NamedTuple, List, Optional
 from dataclasses import dataclass
 from concurrent.futures import ThreadPoolExecutor
@@ -20,9 +19,15 @@ except ImportError:
 # --- CONFIGURATION ---
 @dataclass(frozen=True)
 class Config:
+    PROVIDER: str = "assemblyai"
+    # In production, use os.environ.get("DEEPGRAM_KEY")
+    DEEPGRAM_KEY: str = "d6bf3bf38250b6370e424a0805f6ef915ae00bec"
     DEEPGRAM_URL: str = "https://manage.deepgram.com/storage/assets"
+    ASSEMBLYAI_KEY: str = "193053bc6ff84ba9aac2465506f47d48"
     ASSEMBLYAI_URL: str = "https://api.assemblyai.com/v2/upload"
+    
     COOKIE_FILE: str = "/tmp/cookies.txt"
+    
     CHUNK_DURATION: int = 1800
     BUFFER_TAIL: int = 600
 
@@ -39,14 +44,9 @@ class Cargo(NamedTuple):
     mime_type: str
     size_mb: float
 
-# --- LOGGING HELPERS ---
+# --- LOGGING HELPER ---
 def log(q: asyncio.Queue, msg: str):
-    """Log plain text for the UI console"""
     if q: q.put_nowait(msg + "\n")
-
-def log_json(q: asyncio.Queue, data: dict):
-    """Log JSON specifically for the Chrome Extension to parse"""
-    if q: q.put_nowait(json.dumps(data) + "\n")
 
 def miner_log_monitor(pipe, q):
     """Reads raw stderr from yt-dlp, filters spam, and pushes to queue."""
@@ -59,19 +59,24 @@ def miner_log_monitor(pipe, q):
             if not text: continue
 
             if "[download]" in text:
+                # Clean up the tag
                 clean_text = text.replace("[download]", "[MINER] ⛏️ ").strip()
+                
+                # Rate Limit: Only log progress every 0.5 seconds to prevent spam
                 now = time.time()
                 if (now - last_progress_time) > 0.5:
                     log(q, clean_text)
                     last_progress_time = now
+                    
             elif "[youtube]" in text:
                 log(q, text.replace("[youtube]", "[MINER] 🔎 "))
             elif "[info]" in text:
                 log(q, text.replace("[info]", "[MINER] ℹ️ "))
             else:
+                # Pass through other logs (errors, warnings, etc.) immediately
                 log(q, text)
     except ValueError:
-        pass
+        pass # Handle closed pipe errors during shutdown
 
 # --- CPU BOUND ---
 def create_package(packets: List, input_stream, max_dur: float, fmt: str):
@@ -142,9 +147,11 @@ def run_packager(loop: asyncio.AbstractEventLoop, conveyor_belt: asyncio.Queue, 
 
     cmd.append(target_url)
 
+    # --- REQUIREMENT 3: Log the Full Command ---
+    # We join carefully to make it readable, adding quotes if spaces exist
     printable_cmd = " ".join([f"'{c}'" if " " in c or ";" in c else c for c in cmd])
     log(log_q, f"[PACKAGER] 🏭 Starting: {target_url}")
-    # log(log_q, f"[COMMAND] ⌨️  {printable_cmd}")
+    log(log_q, f"[COMMAND] ⌨️  {printable_cmd}")
     
     process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     
@@ -157,6 +164,7 @@ def run_packager(loop: asyncio.AbstractEventLoop, conveyor_belt: asyncio.Queue, 
     in_container = None
 
     try:
+        # Check if process crashed immediately
         if process.poll() is not None:
              raise Exception(f"Process finished unexpectedly with code {process.returncode}")
 
@@ -194,39 +202,70 @@ def run_packager(loop: asyncio.AbstractEventLoop, conveyor_belt: asyncio.Queue, 
     except Exception as e:
         log(log_q, f"[PACKAGER ERROR] 💥 {e}")
     finally:
-        if in_container:
-            try: in_container.close()
-            except: pass
-        if process:
-            if process.stdout: 
-                try: process.stdout.close()
-                except: pass
-            if process.stderr:
-                try: process.stderr.close()
-                except: pass
-            if process.poll() is None:
-                process.terminate()
-                try: process.wait(timeout=3)
-                except: process.kill()
+        # --- REQUIREMENT 1 & 2: Proper Stream Closure ---
         
+        # 1. Close the AV Container
+        if in_container:
+            try:
+                in_container.close()
+                log(log_q, "[CLEANUP] 🔒 Audio container closed.")
+            except Exception:
+                pass
+        
+        # 2. Terminate the subprocess aggressively but cleanly
+        if process:
+            # Close stdout to break the pipe from the consumer side
+            if process.stdout:
+                try: 
+                    process.stdout.close()
+                except Exception: 
+                    pass
+            
+            # Close stderr
+            if process.stderr:
+                try:
+                    process.stderr.close()
+                except Exception:
+                    pass
+
+            # Handle process termination
+            if process.poll() is None:
+                log(log_q, "[CLEANUP] 🛑 Terminating downloader process...")
+                process.terminate()
+                try:
+                    process.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    log(log_q, "[CLEANUP] 🔪 Force killing downloader...")
+                    process.kill()
+            else:
+                 log(log_q, f"[CLEANUP] 🛑 Downloader exited with code {process.returncode}")
+
+        # Signal end of queue
         asyncio.run_coroutine_threadsafe(conveyor_belt.put(None), loop)
 
 # --- SHIPPER ---
-async def ship_cargo(session: aiohttp.ClientSession, cargo: Cargo, log_q: asyncio.Queue,
-                     provider: str, dg_key: str, aai_key: str):
-    
+async def ship_cargo(session: aiohttp.ClientSession, cargo: Cargo, log_q: asyncio.Queue):
     cargo.buffer.seek(0)
     
-    if provider == "assemblyai":
-        url = CONFIG.ASSEMBLYAI_URL
-        headers = {"Authorization": aai_key, "Content-Type": "application/octet-stream"}
-    else:
-        url = CONFIG.DEEPGRAM_URL
-        headers = {"Authorization": f"Token {dg_key}", "Content-Type": cargo.mime_type}
+    # Generate Unique Asset Identity
+    # Ensures each delivered box is treated as a distinct asset by the provider
+    timestamp = int(time.time())
+    ext = cargo.mime_type.split('/')[-1] if '/' in cargo.mime_type else 'bin'
+    unique_filename = f"box_{cargo.index}_{timestamp}.{ext}"
 
-    if not headers["Authorization"] or headers["Authorization"] == "Token ":
-        log(log_q, f"[SHIPPER] ❌ Missing API Key for {provider}")
-        return
+    if CONFIG.PROVIDER == "assemblyai":
+        url = CONFIG.ASSEMBLYAI_URL
+        headers = {"Authorization": CONFIG.ASSEMBLYAI_KEY, "Content-Type": "application/octet-stream"}
+    else:
+        # Deepgram Logic: Ensure 'name' query param is passed to prevent overwrites
+        base_url = CONFIG.DEEPGRAM_URL
+        separator = "&" if "?" in base_url else "?"
+        url = f"{base_url}{separator}name={unique_filename}"
+        
+        headers = {
+            "Authorization": f"Token {CONFIG.DEEPGRAM_KEY}", 
+            "Content-Type": cargo.mime_type
+        }
 
     try:
         async with session.post(url, headers=headers, data=cargo.buffer) as resp:
@@ -236,27 +275,15 @@ async def ship_cargo(session: aiohttp.ClientSession, cargo: Cargo, log_q: asynci
                 return
             
             body = await resp.json()
-            res_id = body.get("upload_url") if provider == "assemblyai" else (body.get("asset_id") or body.get("asset"))
-            
-            log(log_q, f"[SHIPPER] ✅ Delivered Box #{cargo.index} | {cargo.size_mb}MB")
-            
-            # --- CRITICAL FOR EXTENSION: Send JSON object ---
-            log_json(log_q, {
-                "asset": res_id,
-                "index": cargo.index,
-                "provider": provider,
-                "status": "uploaded"
-            })
-            
+            res_id = body.get("upload_url") if CONFIG.PROVIDER == "assemblyai" else (body.get("asset_id") or body.get("asset"))
+            log(log_q, f"[SHIPPER] ✅ Delivered Box #{cargo.index} | {cargo.size_mb}MB | Asset: {unique_filename} | Ref: {res_id}")
     except Exception as e:
         log(log_q, f"[SHIPPER] ⚠️ Error Box #{cargo.index}: {e}")
     finally:
         cargo.buffer.close()
 
-async def run_shipper(conveyor_belt: asyncio.Queue, log_q: asyncio.Queue, 
-                      provider: str, dg_key: str, aai_key: str):
-    
-    log(log_q, f"[SHIPPER] 🚚 Logistics Partner: {provider.upper()}")
+async def run_shipper(conveyor_belt: asyncio.Queue, log_q: asyncio.Queue):
+    log(log_q, f"[SHIPPER] 🚚 Logistics Partner: {CONFIG.PROVIDER.upper()}")
     async with aiohttp.ClientSession() as session:
         active_shipments = []
         while True:
@@ -264,8 +291,7 @@ async def run_shipper(conveyor_belt: asyncio.Queue, log_q: asyncio.Queue,
             if cargo is None: break
             
             log(log_q, f"[SHIPPER] 🚚 Picked up Box #{cargo.index}. Shipping...")
-            
-            t = asyncio.create_task(ship_cargo(session, cargo, log_q, provider, dg_key, aai_key))
+            t = asyncio.create_task(ship_cargo(session, cargo, log_q))
             active_shipments.append(t)
             active_shipments = [x for x in active_shipments if not x.done()]
             
@@ -276,16 +302,14 @@ async def run_shipper(conveyor_belt: asyncio.Queue, log_q: asyncio.Queue,
 # --- ENTRY POINT ---
 async def run_fly_process(log_queue: asyncio.Queue, url: str, cookies: str, 
                           chunk_size: str, limit_rate: str, 
-                          player_clients: str, wait_time: str, po_token: str,
-                          provider: str, dg_key: str, aai_key: str):
+                          player_clients: str, wait_time: str, po_token: str):
     """Main Orchestrator called by FastAPI"""
-    
     loop = asyncio.get_running_loop()
     conveyor_belt = asyncio.Queue()
     
     log(log_queue, "--- 🏭 LOGISTICS SYSTEM STARTED ---")
     
-    shipper_task = asyncio.create_task(run_shipper(conveyor_belt, log_queue, provider, dg_key, aai_key))
+    shipper_task = asyncio.create_task(run_shipper(conveyor_belt, log_queue))
     
     with ThreadPoolExecutor(max_workers=1) as pool:
         await loop.run_in_executor(
@@ -295,4 +319,4 @@ async def run_fly_process(log_queue: asyncio.Queue, url: str, cookies: str,
         
     await shipper_task
     log(log_queue, "--- ✅ ALL SHIPMENTS COMPLETE ---")
-    log_queue.put_nowait(None)
+    log_queue.put_nowait(None) # Signal end of stream

@@ -203,15 +203,16 @@ class FlyRequest(BaseModel):
     wait_time: str = "2"
     player_clients: str = "tv,android,ios"
     po_token: str = ""
+    # New fields for Extension Compatibility
     provider: str = "assemblyai"
-    mode: str = "data"
-    deepgram_key: str = ""
-    assemblyai_key: str = ""
+    deepgram_key: Optional[str] = ""
+    assemblyai_key: Optional[str] = ""
+    mode: str = "data" # 'data' or 'debug'
 
 @app.post("/api/fly")
 async def fly_process(payload: FlyRequest):
     q = asyncio.Queue()
-    # Pass all payload fields to the processor
+    # Pass all configuration from the payload to the worker
     asyncio.create_task(testfly.run_fly_process(
         q, 
         payload.url, 
@@ -222,15 +223,17 @@ async def fly_process(payload: FlyRequest):
         payload.wait_time, 
         payload.po_token,
         payload.provider,
-        payload.mode,
         payload.deepgram_key,
-        payload.assemblyai_key
+        payload.assemblyai_key,
+        payload.mode
     ))
+    
     async def log_generator():
         while True:
             data = await q.get()
             if data is None: break
             yield data
+            
     return StreamingResponse(log_generator(), media_type="text/plain")
 
 @app.get("/api/list")

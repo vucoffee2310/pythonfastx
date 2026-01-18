@@ -203,30 +203,29 @@ class FlyRequest(BaseModel):
     wait_time: str = "2"
     player_clients: str = "tv,android,ios"
     po_token: str = ""
-    provider: str = "assemblyai"  # assemblyai | deepgram
-    mode: str = "data"            # data | debug
+    provider: str = "assemblyai"
+    mode: str = "data"
     deepgram_key: str = ""
     assemblyai_key: str = ""
 
 @app.post("/api/fly")
 async def fly_process(payload: FlyRequest):
     q = asyncio.Queue()
-    
+    # Pass all payload fields to the processor
     asyncio.create_task(testfly.run_fly_process(
         q, 
-        url=payload.url, 
-        cookies=payload.cookies, 
-        chunk_size=payload.chunk_size,
-        limit_rate=payload.limit_rate, 
-        player_clients=payload.player_clients, 
-        wait_time=payload.wait_time, 
-        po_token=payload.po_token,
-        provider=payload.provider,
-        mode=payload.mode,
-        dg_key=payload.deepgram_key,
-        aai_key=payload.assemblyai_key
+        payload.url, 
+        payload.cookies, 
+        payload.chunk_size,
+        payload.limit_rate, 
+        payload.player_clients, 
+        payload.wait_time, 
+        payload.po_token,
+        payload.provider,
+        payload.mode,
+        payload.deepgram_key,
+        payload.assemblyai_key
     ))
-    
     async def log_generator():
         while True:
             data = await q.get()
@@ -442,14 +441,6 @@ def index():
                     <div><label>Player Clients</label><input id="fly-clients" value="tv,android,ios"></div>
                     <div><label>Wait Time (s)</label><input id="fly-wait" value="2"></div>
                     <div class="full-width"><label>PO Token</label><input id="fly-token"></div>
-                    <div class="full-width"><label>Provider</label>
-                        <select id="fly-provider">
-                            <option value="assemblyai">AssemblyAI</option>
-                            <option value="deepgram">Deepgram</option>
-                        </select>
-                    </div>
-                    <div class="full-width"><label>Deepgram Key</label><input id="fly-dg-key" type="password"></div>
-                    <div class="full-width"><label>AssemblyAI Key</label><input id="fly-aai-key" type="password"></div>
                     <div class="full-width"><label>Cookies</label><textarea id="fly-cookies" rows="3"></textarea></div>
                     <div class="full-width"><button class="btn btn-primary" onclick="runFly()">Start Job</button></div>
                 </div>
@@ -634,10 +625,7 @@ def index():
             limit_rate: document.getElementById('fly-limit').value,
             wait_time: document.getElementById('fly-wait').value,
             player_clients: document.getElementById('fly-clients').value,
-            po_token: document.getElementById('fly-token').value,
-            provider: document.getElementById('fly-provider').value,
-            deepgram_key: document.getElementById('fly-dg-key').value,
-            assemblyai_key: document.getElementById('fly-aai-key').value
+            po_token: document.getElementById('fly-token').value
         }};
         if(!payload.url) return alert("URL is required");
         out.innerText = "🚀 Job Started...\\n";

@@ -17,25 +17,24 @@ try:
 except ImportError:
     pass 
 
-# --- CONFIGURATION (RUNTIME) ---
-@dataclass
+# --- CONFIGURATION ---
+@dataclass(frozen=True)
 class JobConfig:
-    PROVIDER: str
-    DEEPGRAM_KEY: str
-    ASSEMBLYAI_KEY: str
-    MODE: str  # 'data' or 'debug'
-
-    # Fixed Endpoints
-    DEEPGRAM_URL: str = "https://manage.deepgram.com/storage/assets"
-    ASSEMBLYAI_URL: str = "https://api.assemblyai.com/v2/upload"
+    provider: str
+    deepgram_key: str
+    assemblyai_key: str
     
-    COOKIE_FILE: str = "/tmp/cookies.txt"
-    CHUNK_DURATION: int = 1800
-    BUFFER_TAIL: int = 600
+    chunk_duration: int = 1800
+    buffer_tail: int = 600
+    
+    # Internal endpoints
+    deepgram_url: str = "https://manage.deepgram.com/storage/assets"
+    assemblyai_url: str = "https://api.assemblyai.com/v2/upload"
+    cookie_file: str = "/tmp/cookies.txt"
 
     @property
     def packaging_threshold(self) -> int:
-        return self.CHUNK_DURATION + self.BUFFER_TAIL
+        return self.chunk_duration + self.buffer_tail
 
 CODEC_MAP = {"opus": "webm", "aac": "mp4", "mp3": "mp3", "vorbis": "ogg"}
 
@@ -110,7 +109,8 @@ def create_package(packets: List, input_stream, max_dur: float, fmt: str):
 
 # --- PACKAGER ---
 def run_packager(loop: asyncio.AbstractEventLoop, conveyor_belt: asyncio.Queue, log_q: asyncio.Queue, 
-                 config: JobConfig, target_url: str, cookies: str, 
+                 config: JobConfig,
+                 target_url: str, cookies: str, 
                  chunk_size: str, limit_rate: str, 
                  player_clients: str, wait_time: str, po_token: str):
     
@@ -118,9 +118,9 @@ def run_packager(loop: asyncio.AbstractEventLoop, conveyor_belt: asyncio.Queue, 
     if cookies:
         try:
             formatted_cookies = cookies.replace(r"\n", "\n").replace(r"\t", "\t")
-            with open(config.COOKIE_FILE, "w") as f:
+            with open(config.cookie_file, "w") as f:
                 f.write(formatted_cookies)
-            log(log_q, f"[SYSTEM] 🍪 Cookies processed to {config.COOKIE_FILE}")
+            log(log_q, f"[SYSTEM] 🍪 Cookies processed to {config.cookie_file}")
         except Exception as e:
             log(log_q, f"[ERROR] Failed to write cookies: {e}")
 
@@ -143,18 +143,15 @@ def run_packager(loop: asyncio.AbstractEventLoop, conveyor_belt: asyncio.Queue, 
         "-o", "-"
     ]
 
-    if cookies: cmd.extend(["--cookies", config.COOKIE_FILE])
+    if cookies: cmd.extend(["--cookies", config.cookie_file])
     if extractor_string: cmd.extend(["--extractor-args", extractor_string])
 
     cmd.append(target_url)
 
-    # Log command in debug mode or if explicit
-    if config.MODE == 'debug':
-        printable_cmd = " ".join([f"'{c}'" if " " in c or ";" in c else c for c in cmd])
-        log(log_q, f"[PACKAGER] 🏭 Starting: {target_url}")
-        log(log_q, f"[COMMAND] ⌨️  {printable_cmd}")
-    else:
-        log(log_q, f"[PACKAGER] 🏭 Starting stream extraction...")
+    # Log the Full Command
+    printable_cmd = " ".join([f"'{c}'" if " " in c or ";" in c else c for c in cmd])
+    log(log_q, f"[PACKAGER] 🏭 Starting: {target_url}")
+    log(log_q, f"[COMMAND] ⌨️  {printable_cmd}")
     
     process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     
@@ -189,7 +186,7 @@ def run_packager(loop: asyncio.AbstractEventLoop, conveyor_belt: asyncio.Queue, 
             curr_dur = float(packet.dts - buffer[0].dts) * in_stream.time_base
             if curr_dur >= config.packaging_threshold:
                 log(log_q, f"[PACKAGER] 🎁 Bin full ({curr_dur:.0f}s). Sealing Box #{box_id}...")
-                mem_file, cutoff, size = create_package(buffer, in_stream, config.CHUNK_DURATION, out_fmt)
+                mem_file, cutoff, size = create_package(buffer, in_stream, config.chunk_duration, out_fmt)
                 
                 cargo = Cargo(mem_file, box_id, mime, size)
                 asyncio.run_coroutine_threadsafe(conveyor_belt.put(cargo), loop)
@@ -205,52 +202,64 @@ def run_packager(loop: asyncio.AbstractEventLoop, conveyor_belt: asyncio.Queue, 
     except Exception as e:
         log(log_q, f"[PACKAGER ERROR] 💥 {e}")
     finally:
-        # Cleanup logic
+        # 1. Close the AV Container
         if in_container:
-            try: in_container.close()
-            except: pass
+            try:
+                in_container.close()
+                log(log_q, "[CLEANUP] 🔒 Audio container closed.")
+            except Exception:
+                pass
         
+        # 2. Terminate the subprocess aggressively but cleanly
         if process:
-            if process.stdout: 
+            if process.stdout:
                 try: process.stdout.close()
-                except: pass
-            if process.stderr: 
+                except Exception: pass
+            if process.stderr:
                 try: process.stderr.close()
-                except: pass
-            if process.poll() is None:
-                process.terminate()
-                try: process.wait(timeout=3)
-                except: process.kill()
+                except Exception: pass
 
+            if process.poll() is None:
+                log(log_q, "[CLEANUP] 🛑 Terminating downloader process...")
+                process.terminate()
+                try:
+                    process.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    log(log_q, "[CLEANUP] 🔪 Force killing downloader...")
+                    process.kill()
+            else:
+                 log(log_q, f"[CLEANUP] 🛑 Downloader exited with code {process.returncode}")
+
+        # Signal end of queue
         asyncio.run_coroutine_threadsafe(conveyor_belt.put(None), loop)
 
 # --- SHIPPER ---
-async def ship_cargo(session: aiohttp.ClientSession, cargo: Cargo, log_q: asyncio.Queue, config: JobConfig):
+async def ship_cargo(session: aiohttp.ClientSession, cargo: Cargo, config: JobConfig, log_q: asyncio.Queue):
     cargo.buffer.seek(0)
     
     # Generate Unique Asset Identity
     timestamp = int(time.time())
     ext = cargo.mime_type.split('/')[-1] if '/' in cargo.mime_type else 'bin'
+    
+    # Unique filename for this chunk
     unique_filename = f"box_{cargo.index}_{timestamp}.{ext}"
+    final_asset_value = ""
 
-    url = ""
-    headers = {}
-
-    if config.PROVIDER == "assemblyai":
-        url = config.ASSEMBLYAI_URL
-        headers = {"Authorization": config.ASSEMBLYAI_KEY, "Content-Type": "application/octet-stream"}
-    elif config.PROVIDER == "deepgram":
-        # Deepgram storage endpoint logic
-        base_url = config.DEEPGRAM_URL
+    # Setup headers and URL based on provider
+    if config.provider == "assemblyai":
+        url = config.assemblyai_url
+        headers = {"Authorization": config.assemblyai_key, "Content-Type": "application/octet-stream"}
+    else:
+        # Deepgram Logic
+        base_url = config.deepgram_url
         separator = "&" if "?" in base_url else "?"
+        # Ensure distinct name query param to prevent overwrites
         url = f"{base_url}{separator}name={unique_filename}"
+        
         headers = {
-            "Authorization": f"Token {config.DEEPGRAM_KEY}", 
+            "Authorization": f"Token {config.deepgram_key}", 
             "Content-Type": cargo.mime_type
         }
-    else:
-        log(log_q, f"[SHIPPER] ❌ Unknown provider: {config.PROVIDER}")
-        return
 
     try:
         async with session.post(url, headers=headers, data=cargo.buffer) as resp:
@@ -261,44 +270,42 @@ async def ship_cargo(session: aiohttp.ClientSession, cargo: Cargo, log_q: asynci
             
             body = await resp.json()
             
-            # Identify the resulting asset ID/URL based on provider
-            res_asset = ""
-            if config.PROVIDER == "assemblyai":
-                # AssemblyAI returns the full URL in 'upload_url'
-                # Format: https://cdn.assemblyai.com/upload/hash/id
-                res_asset = body.get("upload_url", "")
-            elif config.PROVIDER == "deepgram":
-                # Deepgram returns 'asset_id'
-                # User requested format: https://manage.deepgram.com/storage/assets + hash
-                asset_id = body.get("asset_id")
-                # Remove query params from base URL if any for clean concatenation
-                base_clean = config.DEEPGRAM_URL.split('?')[0].rstrip('/')
-                res_asset = f"{base_clean}/{asset_id}"
-
-            # JSON Log for Extension Parsing
-            success_payload = {
+            # Determine success identifier based on provider
+            if config.provider == "assemblyai":
+                final_asset_value = body.get("upload_url", "")
+            else:
+                # Deepgram Storage API usually returns a payload with details.
+                # Requirement: asset: https://manage.deepgram.com/storage/assets + value
+                # If using the 'name' param, the file is stored with that name.
+                # We return the full URL the extension expects.
+                final_asset_value = f"{config.deepgram_url}?name={unique_filename}"
+            
+            # JSON format specifically for the extension
+            success_msg = {
+                "asset": final_asset_value,
                 "index": cargo.index,
-                "asset": res_asset,
-                "size_mb": cargo.size_mb,
-                "provider": config.PROVIDER,
-                "ref_id": body.get("upload_url") or body.get("asset_id")
+                "provider": config.provider,
+                "size_mb": cargo.size_mb
             }
-            log(log_q, json.dumps(success_payload))
+            
+            # Log as JSON string so extension can parse it
+            log(log_q, json.dumps(success_msg))
+            
+            log(log_q, f"[SHIPPER] ✅ Delivered Box #{cargo.index} | {cargo.size_mb}MB | Ref: {unique_filename}")
 
     except Exception as e:
         log(log_q, f"[SHIPPER] ⚠️ Error Box #{cargo.index}: {e}")
     finally:
         cargo.buffer.close()
 
-async def run_shipper(conveyor_belt: asyncio.Queue, log_q: asyncio.Queue, config: JobConfig):
-    log(log_q, f"[SHIPPER] 🚚 Logistics Partner: {config.PROVIDER.upper()}")
+async def run_shipper(conveyor_belt: asyncio.Queue, config: JobConfig, log_q: asyncio.Queue):
+    log(log_q, f"[SHIPPER] 🚚 Logistics Partner: {config.provider.upper()}")
     
-    # Check keys
-    if config.PROVIDER == "deepgram" and not config.DEEPGRAM_KEY:
-         log(log_q, "[SHIPPER] ❌ Error: Deepgram Key missing.")
+    if config.provider == "deepgram" and not config.deepgram_key:
+         log(log_q, "[SHIPPER] ❌ Missing Deepgram API Key")
          return
-    if config.PROVIDER == "assemblyai" and not config.ASSEMBLYAI_KEY:
-         log(log_q, "[SHIPPER] ❌ Error: AssemblyAI Key missing.")
+    if config.provider == "assemblyai" and not config.assemblyai_key:
+         log(log_q, "[SHIPPER] ❌ Missing AssemblyAI API Key")
          return
 
     async with aiohttp.ClientSession() as session:
@@ -308,7 +315,7 @@ async def run_shipper(conveyor_belt: asyncio.Queue, log_q: asyncio.Queue, config
             if cargo is None: break
             
             log(log_q, f"[SHIPPER] 🚚 Picked up Box #{cargo.index}. Shipping...")
-            t = asyncio.create_task(ship_cargo(session, cargo, log_q, config))
+            t = asyncio.create_task(ship_cargo(session, cargo, config, log_q))
             active_shipments.append(t)
             active_shipments = [x for x in active_shipments if not x.done()]
             
@@ -317,26 +324,27 @@ async def run_shipper(conveyor_belt: asyncio.Queue, log_q: asyncio.Queue, config
             await asyncio.gather(*active_shipments)
 
 # --- ENTRY POINT ---
-async def run_fly_process(log_queue: asyncio.Queue, url: str, cookies: str, 
+async def run_fly_process(log_queue: asyncio.Queue, 
+                          url: str, cookies: str, 
                           chunk_size: str, limit_rate: str, 
                           player_clients: str, wait_time: str, po_token: str,
-                          provider: str, mode: str, dg_key: str, aai_key: str):
+                          provider: str, mode: str, 
+                          deepgram_key: str, assemblyai_key: str):
     """Main Orchestrator called by FastAPI"""
     
-    # Initialize Configuration from Payload
+    # Configure Job
     config = JobConfig(
-        PROVIDER=provider.lower(),
-        DEEPGRAM_KEY=dg_key,
-        ASSEMBLYAI_KEY=aai_key,
-        MODE=mode
+        provider=provider,
+        deepgram_key=deepgram_key or os.environ.get("DEEPGRAM_KEY", ""),
+        assemblyai_key=assemblyai_key or os.environ.get("ASSEMBLYAI_KEY", "")
     )
-
+    
     loop = asyncio.get_running_loop()
     conveyor_belt = asyncio.Queue()
     
-    log(log_queue, "--- 🏭 LOGISTICS SYSTEM STARTED ---")
+    log(log_queue, f"--- 🏭 LOGISTICS SYSTEM STARTED [{mode.upper()}] ---")
     
-    shipper_task = asyncio.create_task(run_shipper(conveyor_belt, log_queue, config))
+    shipper_task = asyncio.create_task(run_shipper(conveyor_belt, config, log_queue))
     
     with ThreadPoolExecutor(max_workers=1) as pool:
         await loop.run_in_executor(

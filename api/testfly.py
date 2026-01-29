@@ -136,6 +136,12 @@ def run_packager(loop: asyncio.AbstractEventLoop, conveyor_belt: asyncio.Queue, 
                  target_url: str, chunk_size: str, limit_rate: str, 
                  player_clients: str, wait_time: str, po_token: str):
     
+    # --- FIX: Ensure 'web' client is included ---
+    # The 'tv' client often fails with SABR (missing URLs) when cookies are used,
+    # and 'android'/'ios' ignore cookies. 'web' provides a stable fallback.
+    if player_clients and "web" not in player_clients:
+        player_clients += ",web"
+    
     extractor_params = []
     if player_clients: extractor_params.append(f"player_client={player_clients}")
     if wait_time: extractor_params.append(f"playback_wait={wait_time}")

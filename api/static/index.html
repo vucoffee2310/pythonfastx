@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Vercel Control</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<nav>
+    <div class="brand">⚡ Vercel Control</div>
+    <div class="nav-links">
+        <div class="nav-btn active" onclick="switchTab('explorer')">Explorer</div>
+        <div class="nav-btn" onclick="switchTab('terminal')">Terminal</div>
+        <div class="nav-btn" onclick="switchTab('testfly')">TestFly</div>
+        <div class="nav-btn" onclick="switchTab('stats'); loadStats()">Monitor</div>
+    </div>
+</nav>
+
+<main>
+    <!-- EXPLORER -->
+    <div id="explorer" class="view active">
+        <div class="path-bar-container">
+            <button class="btn" onclick="upDir()">⬆</button>
+            <input class="path-input" id="addr" onchange="nav(this.value)">
+            <button class="btn" onclick="refresh()">⟳ Refresh</button>
+            <span id="mode-badge" class="badge-snapshot">SNAPSHOT</span>
+        </div>
+
+        <div class="card">
+            <div class="card-head">
+                <div style="display:flex; gap:10px;">
+                    <span style="cursor:pointer" onclick="setMode('runtime'); nav(window.SERVER_CONFIG.projectRoot)">📁 App Root</span>
+                    <span style="color:var(--border)">|</span>
+                    <span style="cursor:pointer" onclick="setMode('runtime'); nav('/')">💻 System</span>
+                    <span style="color:var(--border)">|</span>
+                    <span style="cursor:pointer" onclick="setMode('build'); nav(window.SERVER_CONFIG.projectRoot)">🏗️ Build Snapshot</span>
+                </div>
+                <span class="text-muted" style="font-size:11px">Double click to open</span>
+            </div>
+            <table style="margin-bottom: 0;">
+                <thead><tr><th>Name</th><th>Size</th><th>Type</th><th style="text-align:right">Actions</th></tr></thead>
+                <tbody id="file-list"></tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- TERMINAL -->
+    <div id="terminal" class="view">
+        <div class="terminal-window">
+            <div class="term-out" id="term-out">Welcome to Vercel Shell v1.0\nType 'help' or any linux command.</div>
+            <div class="term-in-row">
+                <span class="term-ps">$</span>
+                <input id="term-in" class="term-in" autocomplete="off" autofocus>
+            </div>
+        </div>
+    </div>
+
+    <!-- TESTFLY -->
+    <div id="testfly" class="view">
+        <div class="card">
+            <div class="card-head">Job Configuration</div>
+            <div class="card-body">
+                <div class="grid-form">
+                    <div class="form-group" style="grid-column: 1 / -1;">
+                        <label>Target URL</label>
+                        <input id="fly-url" class="form-control" placeholder="https://youtube.com/watch?v=...">
+                    </div>
+                    
+                    <div class="form-group">
+                        <label>Provider</label>
+                        <select id="fly-provider" class="form-control">
+                            <option value="assemblyai">AssemblyAI</option>
+                            <option value="deepgram">Deepgram</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Mode</label>
+                        <select id="fly-mode" class="form-control">
+                            <option value="debug">Debug (Verbose)</option>
+                            <option value="data">Data (JSON only)</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Chunk Size</label>
+                        <input id="fly-chunk" class="form-control" value="8M">
+                    </div>
+                    <div class="form-group">
+                        <label>Limit Rate</label>
+                        <input id="fly-limit" class="form-control" value="4M">
+                    </div>
+                    
+                    <div class="form-group">
+                        <label>Wait Time (s)</label>
+                        <input id="fly-wait" class="form-control" value="2">
+                    </div>
+                    <div class="form-group">
+                        <label>Player Clients</label>
+                        <input id="fly-clients" class="form-control" value="tv,android,ios,web">
+                    </div>
+                    
+                    <div class="form-group" style="grid-column: 1 / -1;">
+                        <label>API Key (Optional if Env Var set)</label>
+                        <input id="fly-key" class="form-control" type="password" placeholder="Key override...">
+                    </div>
+                    
+                    <div class="form-group" style="grid-column: 1 / -1;">
+                        <label>PoToken (Optional)</label>
+                        <input id="fly-token" class="form-control" placeholder="web.gvs+...">
+                    </div>
+                    
+                    <div class="form-group" style="grid-column: 1 / -1;">
+                        <label>Cookies (Netscape Format)</label>
+                        <textarea id="fly-cookies" class="form-control" placeholder="# Netscape HTTP Cookie File..."></textarea>
+                    </div>
+
+                    <div class="form-group" style="grid-column: 1 / -1;">
+                        <label style="display:inline-flex; align-items:center; gap:8px; cursor:pointer;">
+                            <input type="checkbox" id="fly-list-formats">
+                            <span style="color:var(--accent)">List Formats Only (Do not download)</span>
+                        </label>
+                    </div>
+                </div>
+                <div style="margin-top: 15px; text-align: right;">
+                    <button class="btn btn-primary" onclick="runFly()">🚀 Launch Job</button>
+                </div>
+            </div>
+        </div>
+        
+        <div class="terminal-window" style="height: 300px;">
+            <div class="term-out" id="fly-out" style="color:#a5d6ff">Job logs will appear here...</div>
+        </div>
+    </div>
+
+    <!-- MONITOR -->
+    <div id="stats" class="view">
+        <div class="grid-form">
+            <!-- System Info -->
+            <div class="card">
+                <div class="card-head">System Runtime</div>
+                <div class="card-body" id="sys-info" style="font-size:12px; color:var(--text-muted); line-height:1.8">Loading...</div>
+            </div>
+
+            <!-- Storage -->
+            <div class="card">
+                <div class="card-head">Storage Usage</div>
+                <div class="card-body" id="storage-list">Loading...</div>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-head">Python Identity Check (Inodes)</div>
+            <table class="table">
+                <thead><tr><th>Path</th><th>Inode</th><th>Status</th></tr></thead>
+                <tbody id="inode-list"></tbody>
+            </table>
+        </div>
+
+        <div class="card">
+            <div class="card-head">Toolchain Availability</div>
+            <table>
+                <thead><tr><th>Tool</th><th>Build Path</th><th>Runtime Path</th><th>Status</th></tr></thead>
+                <tbody id="tool-comp-list"></tbody>
+            </table>
+        </div>
+    </div>
+
+</main>
+
+<!-- Modal -->
+<div class="modal" id="file-modal">
+    <div class="modal-box">
+        <div class="modal-header">
+            <span id="modal-title" style="font-weight:600">File Content</span>
+            <button class="btn" onclick="closeModal()">Close</button>
+        </div>
+        <div class="modal-body" id="modal-text"></div>
+    </div>
+</div>
+
+<!-- SERVER CONFIG INJECTION -->
+<script>
+    // This object is populated by ui.py before serving
+    if (!window.SERVER_CONFIG) {
+        window.SERVER_CONFIG = { projectRoot: "/" };
+    }
+</script>
+<script src="/static/app.js"></script>
+</body>
+</html>

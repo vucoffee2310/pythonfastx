@@ -7,13 +7,13 @@ import os
 import subprocess
 import asyncio
 from typing import Optional
-from . import sys_utils
-from . import fly_engine
+from . import core
+from . import engine
 
 # ========================================================
 # 1. SETUP & ENVIRONMENT
 # ========================================================
-sys_utils.setup_environment()
+core.setup_environment()
 
 av_status = "Initializing..."
 try:
@@ -38,37 +38,16 @@ app.add_middleware(
 )
 
 # ========================================================
-# 2. UI ROUTE (Merged)
+# 2. UI ROUTE
 # ========================================================
 @app.get("/", response_class=HTMLResponse)
 def index():
-    """Serves the main HTML page with injected configuration."""
-    
-    # Path to static HTML file
     index_path = os.path.join(os.path.dirname(__file__), "static", "index.html")
+    if not os.path.exists(index_path): return HTMLResponse("<h1>Error: static/index.html not found</h1>", status_code=500)
+    with open(index_path, "r", encoding="utf-8") as f: content = f.read()
     
-    if not os.path.exists(index_path):
-        return HTMLResponse("<h1>Error: static/index.html not found</h1>", status_code=500)
-
-    with open(index_path, "r", encoding="utf-8") as f:
-        content = f.read()
-
-    # Inject Server Configuration into the HTML before sending
-    # This allows app.js to know the server-side project_root
-    config_script = f"""
-    <script>
-        window.SERVER_CONFIG = {{
-            "projectRoot": "{sys_utils.paths['root']}"
-        }};
-    </script>
-    """
-    
-    # Insert config before the main app script
-    final_html = content.replace(
-        '<script src="/static/app.js"></script>', 
-        f'{config_script}\n<script src="/static/app.js"></script>'
-    )
-
+    config_script = f"""<script>window.SERVER_CONFIG = {{ "projectRoot": "{core.paths['root']}" }};</script>"""
+    final_html = content.replace('<script src="/static/app.js"></script>', f'{config_script}\n<script src="/static/app.js"></script>')
     return HTMLResponse(content=final_html)
 
 # ========================================================
@@ -91,21 +70,11 @@ class FlyRequest(BaseModel):
 @app.post("/api/fly")
 async def fly_process(payload: FlyRequest):
     q = asyncio.Queue()
-    
-    asyncio.create_task(fly_engine.run_fly_process(
-        log_queue=q,
-        url=payload.url,
-        cookies=payload.cookies,
-        chunk_size=payload.chunk_size,
-        limit_rate=payload.limit_rate,
-        player_clients=payload.player_clients, 
-        wait_time=payload.wait_time,
-        po_token=payload.po_token,
-        provider=payload.provider,
-        mode=payload.mode,
-        dg_key=payload.deepgram_key,
-        aai_key=payload.assemblyai_key,
-        only_list_formats=payload.only_list_formats
+    asyncio.create_task(engine.run_fly_process(
+        log_queue=q, url=payload.url, cookies=payload.cookies, chunk_size=payload.chunk_size,
+        limit_rate=payload.limit_rate, player_clients=payload.player_clients, wait_time=payload.wait_time,
+        po_token=payload.po_token, provider=payload.provider, mode=payload.mode,
+        dg_key=payload.deepgram_key, aai_key=payload.assemblyai_key, only_list_formats=payload.only_list_formats
     ))
     
     async def log_generator():
@@ -113,7 +82,6 @@ async def fly_process(payload: FlyRequest):
             data = await q.get()
             if data is None: break
             yield data
-
     return StreamingResponse(log_generator(), media_type="text/plain")
 
 @app.get("/api/list")
@@ -121,7 +89,7 @@ def list_files(path: str = "/", source: str = "runtime"):
     if source == "runtime": path = os.path.abspath(path)
     if source == "build":
         lookup_path = path.rstrip('/') if len(path) > 1 and path.endswith('/') else path
-        items = sys_utils.BUILD_FS_CACHE.get(lookup_path, [])
+        items = core.BUILD_FS_CACHE.get(lookup_path, [])
         return {"current_path": path, "items": items, "source": "build"}
 
     if not os.path.exists(path): raise HTTPException(404, "Path not found")
@@ -132,7 +100,7 @@ def list_files(path: str = "/", source: str = "runtime"):
                 try:
                     items.append({
                         "name": e.name, "path": e.path, "is_dir": e.is_dir(),
-                        "size": sys_utils.get_size_str(e.path) if not e.is_dir() else "-",
+                        "size": core.get_size_str(e.path) if not e.is_dir() else "-",
                         "ext": os.path.splitext(e.name)[1].lower() if not e.is_dir() else ""
                     })
                 except: continue
@@ -143,7 +111,7 @@ def list_files(path: str = "/", source: str = "runtime"):
 def run_shell(cmd: str):
     if not cmd: return {"out": ""}
     try:
-        res = subprocess.run(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=10, cwd=sys_utils.paths["root"], env=os.environ)
+        res = subprocess.run(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=10, cwd=core.paths["root"], env=os.environ)
         return {"out": res.stdout}
     except subprocess.TimeoutExpired: return {"out": "⚠️ Command timed out."}
     except Exception as e: return {"out": str(e)}
@@ -151,12 +119,12 @@ def run_shell(cmd: str):
 @app.get("/api/stats")
 def stats_endpoint():
     stats = []
-    locations = [("App Code", sys_utils.paths["root"]), ("Dependencies", sys_utils.paths["vendor"]), ("Binaries", sys_utils.paths["bin"]), ("Temp", "/tmp")]
+    locations = [("App Code", core.paths["root"]), ("Dependencies", core.paths["vendor"]), ("Binaries", core.paths["bin"]), ("Temp", "/tmp")]
     for label, path in locations:
-        if os.path.exists(path): stats.append({"label": label, "path": path, "size": sys_utils.get_size_str(path)})
+        if os.path.exists(path): stats.append({"label": label, "path": path, "size": core.get_size_str(path)})
     return {
-        "storage": stats, "av": av_status, "runtime": sys_utils.get_runtime_env_info(),
-        "tools": sys_utils.compare_tools(), "inodes": sys_utils.get_python_inodes(), "has_build_index": bool(sys_utils.BUILD_FS_CACHE)
+        "storage": stats, "av": av_status, "runtime": core.get_runtime_env_info(),
+        "tools": core.compare_tools(), "inodes": core.get_python_inodes(), "has_build_index": bool(core.BUILD_FS_CACHE)
     }
 
 @app.get("/api/view")

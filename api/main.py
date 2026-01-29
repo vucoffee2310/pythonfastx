@@ -478,9 +478,9 @@ def index():
                     </div>
 
                     <!-- Hidden Params defaults -->
-                    <input type="hidden" id="fly-wait" value="2">
-                    <input type="hidden" id="fly-clients" value="tv,android,ios">
-                    <input type="hidden" id="fly-token" value="">
+                    <input id="fly-wait" value="2">
+                    <input id="fly-clients" value="tv,android,ios">
+                    <input id="fly-token" value="">
                 </div>
                 <div style="margin-top: 15px; text-align: right;">
                     <button class="btn btn-primary" onclick="runFly()">🚀 Launch Job</button>

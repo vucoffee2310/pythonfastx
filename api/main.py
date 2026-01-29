@@ -169,7 +169,7 @@ class FlyRequest(BaseModel):
     chunk_size: str = "8M"
     limit_rate: str = "4M"
     wait_time: str = "2"
-    player_clients: str = "tv,android,ios"
+    player_clients: str = "tv,android,ios,web"
     po_token: str = ""
     provider: str = "assemblyai"
     mode: str = "debug"
@@ -425,7 +425,7 @@ def index():
     <!-- TERMINAL -->
     <div id="terminal" class="view">
         <div class="terminal-window">
-            <div class="term-out" id="term-out">Welcome to Vercel Shell v1.0\nType 'help' or any linux command.</div>
+            <div class="term-out" id="term-out">Welcome to Vercel Shell v1.0\\nType 'help' or any linux command.</div>
             <div class="term-in-row">
                 <span class="term-ps">$</span>
                 <input id="term-in" class="term-in" autocomplete="off" autofocus>
@@ -467,20 +467,29 @@ def index():
                         <input id="fly-limit" class="form-control" value="4M">
                     </div>
                     
+                    <div class="form-group">
+                        <label>Wait Time (s)</label>
+                        <input id="fly-wait" class="form-control" value="2">
+                    </div>
+                    <div class="form-group">
+                        <label>Player Clients</label>
+                        <input id="fly-clients" class="form-control" value="tv,android,ios,web">
+                    </div>
+                    
                     <div class="form-group" style="grid-column: 1 / -1;">
                         <label>API Key (Optional if Env Var set)</label>
                         <input id="fly-key" class="form-control" type="password" placeholder="Key override...">
                     </div>
                     
                     <div class="form-group" style="grid-column: 1 / -1;">
+                        <label>PoToken (Optional)</label>
+                        <input id="fly-token" class="form-control" placeholder="web.gvs+...">
+                    </div>
+                    
+                    <div class="form-group" style="grid-column: 1 / -1;">
                         <label>Cookies (Netscape Format)</label>
                         <textarea id="fly-cookies" class="form-control" placeholder="# Netscape HTTP Cookie File..."></textarea>
                     </div>
-
-                    <!-- Hidden Params defaults -->
-                    <input id="fly-wait" value="2">
-                    <input id="fly-clients" value="tv,android,ios">
-                    <input id="fly-token" value="">
                 </div>
                 <div style="margin-top: 15px; text-align: right;">
                     <button class="btn btn-primary" onclick="runFly()">🚀 Launch Job</button>

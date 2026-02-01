@@ -83,7 +83,8 @@ fi
 # --- 5. Python Dependencies: Core ---
 if ! python3 -c "import fastapi" &> /dev/null; then
     echo "📦 Installing core Python requirements..."
-    pip install fastapi uvicorn yt-dlp[default] aiohttp > /dev/null
+    # Added curl_cffi for impersonate support
+    pip install fastapi uvicorn yt-dlp[default] aiohttp curl_cffi > /dev/null
 else
     echo "✨ Python core libraries already present. Skipping."
 fi

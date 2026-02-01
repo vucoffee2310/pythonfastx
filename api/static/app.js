@@ -187,6 +187,7 @@ async function runFly() {
         wait_time: document.getElementById('fly-wait').value,
         player_clients: document.getElementById('fly-clients').value,
         po_token: document.getElementById('fly-token').value,
+        impersonate: document.getElementById('fly-impersonate').value,
         provider: provider,
         mode: document.getElementById('fly-mode').value,
         deepgram_key: (provider === 'deepgram') ? key : "",

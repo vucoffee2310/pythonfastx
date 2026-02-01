@@ -1,6 +1,27 @@
 set -e
 
 # ========================================================
+# 🧹 NUCLEAR CLEANUP (Force Fresh Install)
+# ========================================================
+echo "☢️  INITIATING NUCLEAR CLEANUP..."
+
+# 1. Remove existing virtual environments
+if [ -d ".venv" ]; then
+    echo "🗑️  Deleting existing .venv..."
+    rm -rf .venv
+fi
+if [ -d "/vercel/path0/.vercel/python/.venv" ]; then
+    echo "🗑️  Deleting Vercel cached .venv..."
+    rm -rf /vercel/path0/.vercel/python/.venv
+fi
+
+# 2. Clear pip cache if possible (though Vercel might persist this elsewhere)
+echo "🗑️  Clearing pip cache..."
+pip cache purge > /dev/null 2>&1 || true
+
+echo "✅ Environment sanitized."
+
+# ========================================================
 # 🧬 PYTHON IDENTITY TEST
 # ========================================================
 echo "----------------------------------------"
@@ -15,17 +36,15 @@ echo "🏠 Real Home: $(python3 -c 'import os; print(os.path.realpath(os.sys.exe
 echo "----------------------------------------"
 
 # --- 1. Environment Metadata ---
-if [ ! -f "build_env_info.txt" ]; then
-    echo "🔍 Capturing Build Environment Metadata..."
-    {
-      echo "=== BUILD DATE ==="
-      date
-      echo -e "\n=== BUILD OS INFO (/etc/os-release) ==="
-      cat /etc/os-release || echo "N/A"
-      echo -e "\n=== BUILD GLIBC VERSION ==="
-      ldd --version || echo "ldd not found"
-    } | tee build_env_info.txt
-fi
+echo "🔍 Capturing Build Environment Metadata..."
+{
+  echo "=== BUILD DATE ==="
+  date
+  echo -e "\n=== BUILD OS INFO (/etc/os-release) ==="
+  cat /etc/os-release || echo "N/A"
+  echo -e "\n=== BUILD GLIBC VERSION ==="
+  ldd --version || echo "ldd not found"
+} | tee build_env_info.txt
 
 mkdir -p bin
 
@@ -81,31 +100,25 @@ else
 fi
 
 # --- 5. Python Dependencies: Core ---
-if ! python3 -c "import fastapi" &> /dev/null; then
-    echo "📦 Installing core Python requirements..."
-    # Added curl_cffi for impersonate support
-    pip install fastapi uvicorn yt-dlp[default] aiohttp curl_cffi > /dev/null
-else
-    echo "✨ Python core libraries already present. Skipping."
-fi
+# Force install every time because we nuked the environment
+echo "📦 Force Installing core Python requirements..."
+pip install --force-reinstall --no-cache-dir fastapi uvicorn "yt-dlp[default]" aiohttp curl_cffi
 
 # --- 6. Python Dependencies: Custom AV ---
-if ! python3 -c "import av" &> /dev/null; then
-    echo "⬇️  Downloading Custom AV Zip..."
-    curl -L -s -o av_custom.zip "https://github.com/vucoffee2310/Collection/releases/download/ffmpeg-audio/av-16.1.0-cp311-abi3-manylinux_2_17_x86_64.zip"
-    echo "📂 Unzipping & Installing Custom Wheel..."
-    unzip -q -o av_custom.zip
-    pip install *.whl > /dev/null
-    rm -f av_custom.zip *.whl
-    echo "✅ Custom PyAV installed."
-else
-    echo "✨ Custom PyAV already present. Skipping."
-fi
+# Re-download and re-install custom AV every time to ensure fresh state
+echo "⬇️  Downloading Custom AV Zip..."
+rm -f av_custom.zip *.whl  # Ensure cleanup first
+curl -L -s -o av_custom.zip "https://github.com/vucoffee2310/Collection/releases/download/ffmpeg-audio/av-16.1.0-cp311-abi3-manylinux_2_17_x86_64.zip"
+echo "📂 Unzipping & Installing Custom Wheel..."
+unzip -q -o av_custom.zip
+pip install --force-reinstall --no-cache-dir *.whl > /dev/null
+rm -f av_custom.zip *.whl
+echo "✅ Custom PyAV installed."
 
 # --- 7. requirements.txt ---
 if [ -f requirements.txt ]; then
     echo "📦 Finalizing requirements.txt..."
-    pip install -r requirements.txt > /dev/null
+    pip install --force-reinstall --no-cache-dir -r requirements.txt > /dev/null
 fi
 
 echo "----------------------------------------"
@@ -143,7 +156,7 @@ echo "📝 Cataloging Build Tools..."
 python3 -c "
 import shutil, json
 # Added 'busybox' to the tools list
-tools = ['tree', 'jq', 'busybox', 'deno', 'curl', 'wget', 'git', 'python3', 'pip', 'tar', 'gzip', 'ffmpeg', 'gcc', 'make', 'ld']
+tools = ['tree', 'jq', 'deno', 'curl', 'wget', 'git', 'python3', 'pip', 'tar', 'gzip', 'gcc', 'make', 'ld']
 data = {t: shutil.which(t) for t in tools}
 # Fallback check in local ./bin/ if not found in PATH
 import os

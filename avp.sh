@@ -156,7 +156,7 @@ echo "📝 Cataloging Build Tools..."
 python3 -c "
 import shutil, json
 # Added 'busybox' to the tools list
-tools = ['tree', 'jq', 'deno', 'curl', 'wget', 'git', 'python3', 'pip', 'tar', 'gzip', 'gcc', 'make', 'ld']
+tools = ['tree', 'jq', 'deno', 'curl', 'wget', 'git', 'pip', 'tar', 'gzip', 'gcc', 'make', 'ld']
 data = {t: shutil.which(t) for t in tools}
 # Fallback check in local ./bin/ if not found in PATH
 import os

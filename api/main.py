@@ -61,6 +61,7 @@ class FlyRequest(BaseModel):
     wait_time: str = "2"
     player_clients: str = "tv,android,ios,web"
     po_token: str = ""
+    impersonate: str = ""
     provider: str = "assemblyai"
     mode: str = "debug"
     deepgram_key: Optional[str] = ""
@@ -73,7 +74,7 @@ async def fly_process(payload: FlyRequest):
     asyncio.create_task(engine.run_fly_process(
         log_queue=q, url=payload.url, cookies=payload.cookies, chunk_size=payload.chunk_size,
         limit_rate=payload.limit_rate, player_clients=payload.player_clients, wait_time=payload.wait_time,
-        po_token=payload.po_token, provider=payload.provider, mode=payload.mode,
+        po_token=payload.po_token, impersonate=payload.impersonate, provider=payload.provider, mode=payload.mode,
         dg_key=payload.deepgram_key, aai_key=payload.assemblyai_key, only_list_formats=payload.only_list_formats
     ))
     

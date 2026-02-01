@@ -100,12 +100,24 @@ if [ -f requirements.txt ]; then
     pip install --no-cache-dir -r requirements.txt > /dev/null
 fi
 
+# ========================================================
+# 8. CREATE YT-DLP WRAPPER
+# ========================================================
+echo "----------------------------------------"
+echo "🔧 Creating yt-dlp command-line wrapper..."
+echo '#!/bin/sh' > bin/yt-dlp
+echo 'python /var/task/_vendor/yt_dlp "$@"' >> bin/yt-dlp
+chmod +x bin/yt-dlp
+echo "✅ Wrapper created at bin/yt-dlp"
+echo "----------------------------------------"
+
+
 echo "----------------------------------------"
 echo "📊 Final Workspace Check"
 ./bin/tree -L 2 bin/
 
 # ========================================================
-# 8. BUILD ARTIFACT GENERATION
+# 9. BUILD ARTIFACT GENERATION
 # ========================================================
 
 echo "🕵️  Snapshotting Specific Python Inodes..."
@@ -134,7 +146,7 @@ with open('python_inodes.json', 'w') as f:
 echo "📝 Cataloging Build Tools..."
 python3 -c "
 import shutil, json
-# Added 'busybox' to the tools list
+# Added 'busybox' and 'pip' to the tools list
 tools = ['tree', 'jq', 'deno', 'curl', 'wget', 'git', 'pip', 'tar', 'gzip', 'gcc', 'make', 'ld']
 data = {t: shutil.which(t) for t in tools}
 # Fallback check in local ./bin/ if not found in PATH

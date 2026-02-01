@@ -102,7 +102,40 @@
                     
                     <div class="form-group" style="grid-column: 1 / -1;">
                         <label>Impersonate (Browser Target)</label>
-                        <input id="fly-impersonate" class="form-control" placeholder="e.g. chrome110, safari15_5, chrome110:windows-10">
+                        <select id="fly-impersonate" class="form-control">
+                            <option value="">None (Default)</option>
+                            <option value="chrome-136:macos-15">Chrome 136 (macOS 15)</option>
+                            <option value="chrome-133:macos-15">Chrome 133 (macOS 15)</option>
+                            <option value="chrome-131:macos-14">Chrome 131 (macOS 14)</option>
+                            <option value="chrome-124:macos-14">Chrome 124 (macOS 14)</option>
+                            <option value="chrome-123:macos-14">Chrome 123 (macOS 14)</option>
+                            <option value="chrome-120:macos-14">Chrome 120 (macOS 14)</option>
+                            <option value="chrome-119:macos-14">Chrome 119 (macOS 14)</option>
+                            <option value="chrome-116:windows-10">Chrome 116 (Windows 10)</option>
+                            <option value="chrome-110:windows-10">Chrome 110 (Windows 10)</option>
+                            <option value="chrome-107:windows-10">Chrome 107 (Windows 10)</option>
+                            <option value="chrome-104:windows-10">Chrome 104 (Windows 10)</option>
+                            <option value="chrome-101:windows-10">Chrome 101 (Windows 10)</option>
+                            <option value="chrome-100:windows-10">Chrome 100 (Windows 10)</option>
+                            <option value="chrome-99:windows-10">Chrome 99 (Windows 10)</option>
+                            <option value="chrome-131:android-14">Chrome 131 (Android 14)</option>
+                            <option value="chrome-99:android-12">Chrome 99 (Android 12)</option>
+                            <option value="safari-26.0:macos-26">Safari 26.0 (macOS 26)</option>
+                            <option value="safari-18.4:macos-15">Safari 18.4 (macOS 15)</option>
+                            <option value="safari-18.0:macos-15">Safari 18.0 (macOS 15)</option>
+                            <option value="safari-17.0:macos-14">Safari 17.0 (macOS 14)</option>
+                            <option value="safari-15.5:macos-14">Safari 15.5 (macOS 14)</option>
+                            <option value="safari-15.3:macos-14">Safari 15.3 (macOS 14)</option>
+                            <option value="safari-26.0:ios-26.0">Safari 26.0 (iOS 26.0)</option>
+                            <option value="safari-18.4:ios-18.4">Safari 18.4 (iOS 18.4)</option>
+                            <option value="safari-18.0:ios-18.0">Safari 18.0 (iOS 18.0)</option>
+                            <option value="safari-17.2:ios-17.2">Safari 17.2 (iOS 17.2)</option>
+                            <option value="firefox-135:macos-14">Firefox 135 (macOS 14)</option>
+                            <option value="firefox-133:macos-14">Firefox 133 (macOS 14)</option>
+                            <option value="edge-101:windows-10">Edge 101 (Windows 10)</option>
+                            <option value="edge-99:windows-10">Edge 99 (Windows 10)</option>
+                            <option value="tor-14.5:macos-14">Tor 14.5 (macOS 14)</option>
+                        </select>
                     </div>
 
                     <div class="form-group" style="grid-column: 1 / -1;">
@@ -168,6 +201,14 @@
                 <thead><tr><th>Tool</th><th>Build Path</th><th>Runtime Path</th><th>Status</th></tr></thead>
                 <tbody id="tool-comp-list"></tbody>
             </table>
+        </div>
+
+        <!-- ADD THIS NEW CARD -->
+        <div class="card">
+            <div class="card-head">Installed Python Packages</div>
+            <div class="card-body">
+                <pre id="pip-list-output" style="white-space: pre-wrap; font-family:var(--mono); font-size: 11px;">Loading...</pre>
+            </div>
         </div>
     </div>
 

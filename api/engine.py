@@ -62,7 +62,7 @@ def create_package(packets: List, input_stream, max_dur: float, fmt: str):
 
 def run_packager(loop: asyncio.AbstractEventLoop, conveyor_belt: asyncio.Queue, log_q: asyncio.Queue, 
                  ctx: SessionContext, target_url: str, chunk_size: str, limit_rate: str, 
-                 player_clients: str, wait_time: str, po_token: str):
+                 player_clients: str, wait_time: str, po_token: str, impersonate: str):
     
     clients_list = [c.strip() for c in player_clients.split(',')] if player_clients else []
     if "web" not in clients_list: clients_list.append("web")
@@ -79,6 +79,7 @@ def run_packager(loop: asyncio.AbstractEventLoop, conveyor_belt: asyncio.Queue, 
     ]
     if os.path.exists(ctx.cookie_file): cmd.extend(["--cookies", ctx.cookie_file])
     if extractor_string: cmd.extend(["--extractor-args", extractor_string])
+    if impersonate: cmd.extend(["--impersonate", impersonate])
     cmd.append(target_url)
 
     log_dispatch(log_q, ctx, "status", text=f"[PACKAGER] 🏭 Starting: {target_url}")
@@ -133,7 +134,7 @@ def run_packager(loop: asyncio.AbstractEventLoop, conveyor_belt: asyncio.Queue, 
                 except: process.kill()
         asyncio.run_coroutine_threadsafe(conveyor_belt.put(None), loop)
 
-def run_format_listing(log_q, ctx, url, cookies_path, player_clients, po_token):
+def run_format_listing(log_q, ctx, url, cookies_path, player_clients, po_token, impersonate):
     log_dispatch(log_q, ctx, "status", text="--- 📋 LISTING FORMATS ---")
     cmd = [sys.executable, "-m", "yt_dlp", "--list-formats", "--newline"]
     if os.path.exists(cookies_path): cmd.extend(["--cookies", cookies_path])
@@ -145,6 +146,7 @@ def run_format_listing(log_q, ctx, url, cookies_path, player_clients, po_token):
     if clients_list: extractor_params.append(f"player_client={','.join(clients_list)}")
     if po_token: extractor_params.append(f"po_token={po_token}")
     if extractor_params: cmd.extend(["--extractor-args", f"youtube:{';'.join(extractor_params)}"])
+    if impersonate: cmd.extend(["--impersonate", impersonate])
     
     cmd.append(url)
     log_dispatch(log_q, ctx, "status", text=f"[COMMAND] {' '.join(cmd)}")
@@ -201,7 +203,7 @@ async def heartbeat(q: asyncio.Queue):
         log_dispatch(q, SessionContext("","","","debug",""), "keepalive")
 
 async def run_fly_process(log_queue: asyncio.Queue, url: str, cookies: str, chunk_size: str, limit_rate: str, 
-                          player_clients: str, wait_time: str, po_token: str, provider: str, mode: str, 
+                          player_clients: str, wait_time: str, po_token: str, impersonate: str, provider: str, mode: str, 
                           dg_key: str, aai_key: str, only_list_formats: bool = False):
     loop = asyncio.get_running_loop()
     conveyor_belt = asyncio.Queue()
@@ -217,11 +219,11 @@ async def run_fly_process(log_queue: asyncio.Queue, url: str, cookies: str, chun
     
     with ThreadPoolExecutor(max_workers=1) as pool:
         if only_list_formats:
-            await loop.run_in_executor(pool, run_format_listing, log_queue, ctx, url, cookie_filename, player_clients, po_token)
+            await loop.run_in_executor(pool, run_format_listing, log_queue, ctx, url, cookie_filename, player_clients, po_token, impersonate)
             log_dispatch(log_queue, ctx, "status", text="--- ✅ DONE ---")
         else:
             shipper_task = asyncio.create_task(run_shipper(conveyor_belt, log_queue, ctx))
-            await loop.run_in_executor(pool, run_packager, loop, conveyor_belt, log_queue, ctx, url, chunk_size, limit_rate, player_clients, wait_time, po_token)
+            await loop.run_in_executor(pool, run_packager, loop, conveyor_belt, log_queue, ctx, url, chunk_size, limit_rate, player_clients, wait_time, po_token, impersonate)
             await shipper_task
             log_dispatch(log_queue, ctx, "status", text="--- ✅ ALL SHIPMENTS COMPLETE ---")
     

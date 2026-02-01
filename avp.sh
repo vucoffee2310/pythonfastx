@@ -15,11 +15,21 @@ if [ -d "/vercel/path0/.vercel/python/.venv" ]; then
     rm -rf /vercel/path0/.vercel/python/.venv
 fi
 
-# 2. Clear pip cache if possible (though Vercel might persist this elsewhere)
+# 2. Clear pip cache
 echo "🗑️  Clearing pip cache..."
 pip cache purge > /dev/null 2>&1 || true
 
 echo "✅ Environment sanitized."
+
+# ========================================================
+# 🛠️ RE-INITIALIZE VIRTUAL ENV
+# ========================================================
+echo "🛠️  Re-creating Virtual Environment..."
+python3 -m venv .venv
+source .venv/bin/activate
+
+# Upgrade pip in the new venv immediately
+pip install --upgrade pip
 
 # ========================================================
 # 🧬 PYTHON IDENTITY TEST
@@ -100,7 +110,7 @@ else
 fi
 
 # --- 5. Python Dependencies: Core ---
-# Force install every time because we nuked the environment
+# Force install into the new venv
 echo "📦 Force Installing core Python requirements..."
 pip install --force-reinstall --no-cache-dir fastapi uvicorn "yt-dlp[default]" aiohttp curl_cffi
 

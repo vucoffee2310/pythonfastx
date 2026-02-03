@@ -67,6 +67,7 @@ class FlyRequest(BaseModel):
     deepgram_key: Optional[str] = ""
     assemblyai_key: Optional[str] = ""
     only_list_formats: bool = False
+    no_playlist: bool = False
 
 @app.post("/api/fly")
 async def fly_process(payload: FlyRequest):
@@ -75,7 +76,8 @@ async def fly_process(payload: FlyRequest):
         log_queue=q, url=payload.url, cookies=payload.cookies, chunk_size=payload.chunk_size,
         limit_rate=payload.limit_rate, player_clients=payload.player_clients, wait_time=payload.wait_time,
         po_token=payload.po_token, impersonate=payload.impersonate, provider=payload.provider, mode=payload.mode,
-        dg_key=payload.deepgram_key, aai_key=payload.assemblyai_key, only_list_formats=payload.only_list_formats
+        dg_key=payload.deepgram_key, aai_key=payload.assemblyai_key, only_list_formats=payload.only_list_formats,
+        no_playlist=payload.no_playlist
     ))
     
     async def log_generator():

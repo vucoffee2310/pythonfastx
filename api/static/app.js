@@ -192,7 +192,8 @@ async function runFly() {
         mode: document.getElementById('fly-mode').value,
         deepgram_key: (provider === 'deepgram') ? key : "",
         assemblyai_key: (provider === 'assemblyai') ? key : "",
-        only_list_formats: document.getElementById('fly-list-formats').checked
+        only_list_formats: document.getElementById('fly-list-formats').checked,
+        no_playlist: document.getElementById('fly-no-playlist').checked
     };
     
     if(!payload.url) return alert("Target URL is required");

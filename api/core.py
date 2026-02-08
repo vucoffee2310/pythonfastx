@@ -136,10 +136,7 @@ load_build_fs_cache()
 # ========================================================
 @dataclass(frozen=True)
 class Config:
-    CHUNK_DURATION: int = 1800
-    BUFFER_TAIL: int = 600
-    @property
-    def packaging_threshold(self) -> int: return self.CHUNK_DURATION + self.BUFFER_TAIL
+    BUFFER_TAIL: int = 600 # 10 minutes buffer for "Old Approach"
 
 CONFIG = Config()
 CODEC_MAP = {"opus": "webm", "aac": "mp4", "mp3": "mp3", "vorbis": "ogg"}

@@ -85,19 +85,24 @@ def run_packager(loop: asyncio.AbstractEventLoop, conveyor_belt: asyncio.Queue, 
     if impersonate: cmd.extend(["--impersonate", impersonate])
     cmd.append(target_url)
 
-    # --- DUAL MODE SPLIT LOGIC ---
-    
-    # 1. Base Target
+    # ==========================================================
+    # ✂️ SPLIT LOGIC
+    # ==========================================================
     base_split_seconds = split_duration * 60
+    
+    # 1. Fallback / Streaming Mode
+    # If duration is unknown, we cut at [split_duration] but ONLY if we have [BUFFER_TAIL] more audio.
+    # This prevents tiny final chunks.
     target_split = base_split_seconds
-    threshold = base_split_seconds + CONFIG.BUFFER_TAIL # e.g. 30m + 10m buffer = 40m before cut
+    threshold = base_split_seconds + CONFIG.BUFFER_TAIL
 
-    # 2. Balanced (New) Approach: Use Total Duration to split evenly if possible
+    # 2. Balanced Mode
+    # If duration is known, we divide perfectly.
     if total_duration > 0:
         num_parts = math.ceil(total_duration / base_split_seconds)
         if num_parts > 0:
             target_split = total_duration / num_parts
-            # With balanced split, we rely on even division, so the buffer is minimal (30s)
+            # Buffer is reduced to 30s just to ensure we catch the keyframe
             threshold = target_split + 30.0 
             log_dispatch(log_q, ctx, "status", text=f"[PACKAGER] ⚖️ Balanced Split: {num_parts} parts @ ~{target_split/60:.1f}m each (Total: {total_duration/60:.1f}m)")
 
@@ -125,7 +130,7 @@ def run_packager(loop: asyncio.AbstractEventLoop, conveyor_belt: asyncio.Queue, 
             buffer.append(packet)
             curr_dur = float(packet.dts - buffer[0].dts) * in_stream.time_base
             
-            # Use calculated threshold (Dual Mode)
+            # Dynamic Threshold Check
             if curr_dur >= threshold:
                 log_dispatch(log_q, ctx, "status", text=f"[PACKAGER] 🎁 Bin full ({curr_dur:.0f}s). Sealing Box #{box_id}...")
                 mem_file, cutoff, size = create_package(buffer, in_stream, target_split, out_fmt)

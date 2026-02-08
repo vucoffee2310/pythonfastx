@@ -2,6 +2,7 @@ import sys
 import io
 import os
 import time
+import math
 import asyncio
 import subprocess
 import threading
@@ -62,7 +63,8 @@ def create_package(packets: List, input_stream, max_dur: float, fmt: str):
 
 def run_packager(loop: asyncio.AbstractEventLoop, conveyor_belt: asyncio.Queue, log_q: asyncio.Queue, 
                  ctx: SessionContext, target_url: str, chunk_size: str, limit_rate: str, 
-                 player_clients: str, wait_time: str, po_token: str, impersonate: str, no_playlist: bool):
+                 player_clients: str, wait_time: str, po_token: str, impersonate: str, 
+                 no_playlist: bool, total_duration: float = 0.0, split_duration: int = 30):
     
     clients_list = [c.strip() for c in player_clients.split(',')] if player_clients else []
     if "web" not in clients_list: clients_list.append("web")
@@ -83,8 +85,23 @@ def run_packager(loop: asyncio.AbstractEventLoop, conveyor_belt: asyncio.Queue, 
     if impersonate: cmd.extend(["--impersonate", impersonate])
     cmd.append(target_url)
 
-    log_dispatch(log_q, ctx, "status", text=f"[PACKAGER] 🏭 Starting: {target_url}")
-    log_dispatch(log_q, ctx, "status", text=f"[COMMAND] {' '.join(cmd)}")
+    # --- DUAL MODE SPLIT LOGIC ---
+    
+    # 1. Base Target
+    base_split_seconds = split_duration * 60
+    target_split = base_split_seconds
+    threshold = base_split_seconds + CONFIG.BUFFER_TAIL # e.g. 30m + 10m buffer = 40m before cut
+
+    # 2. Balanced (New) Approach: Use Total Duration to split evenly if possible
+    if total_duration > 0:
+        num_parts = math.ceil(total_duration / base_split_seconds)
+        if num_parts > 0:
+            target_split = total_duration / num_parts
+            # With balanced split, we rely on even division, so the buffer is minimal (30s)
+            threshold = target_split + 30.0 
+            log_dispatch(log_q, ctx, "status", text=f"[PACKAGER] ⚖️ Balanced Split: {num_parts} parts @ ~{target_split/60:.1f}m each (Total: {total_duration/60:.1f}m)")
+
+    log_dispatch(log_q, ctx, "status", text=f"[PACKAGER] factory start: {target_url}")
     
     process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     log_thread = threading.Thread(target=miner_log_monitor, args=(process.stderr, log_q, ctx))
@@ -107,9 +124,11 @@ def run_packager(loop: asyncio.AbstractEventLoop, conveyor_belt: asyncio.Queue, 
             if packet.dts is None: continue
             buffer.append(packet)
             curr_dur = float(packet.dts - buffer[0].dts) * in_stream.time_base
-            if curr_dur >= CONFIG.packaging_threshold:
+            
+            # Use calculated threshold (Dual Mode)
+            if curr_dur >= threshold:
                 log_dispatch(log_q, ctx, "status", text=f"[PACKAGER] 🎁 Bin full ({curr_dur:.0f}s). Sealing Box #{box_id}...")
-                mem_file, cutoff, size = create_package(buffer, in_stream, CONFIG.CHUNK_DURATION, out_fmt)
+                mem_file, cutoff, size = create_package(buffer, in_stream, target_split, out_fmt)
                 cargo = Cargo(mem_file, box_id, mime, size)
                 asyncio.run_coroutine_threadsafe(conveyor_belt.put(cargo), loop)
                 buffer = buffer[cutoff + 1 :]
@@ -206,7 +225,8 @@ async def heartbeat(q: asyncio.Queue):
 
 async def run_fly_process(log_queue: asyncio.Queue, url: str, cookies: str, chunk_size: str, limit_rate: str, 
                           player_clients: str, wait_time: str, po_token: str, impersonate: str, provider: str, mode: str, 
-                          dg_key: str, aai_key: str, only_list_formats: bool = False, no_playlist: bool = False):
+                          dg_key: str, aai_key: str, only_list_formats: bool = False, no_playlist: bool = False,
+                          total_duration: float = 0.0, split_duration: int = 30):
     loop = asyncio.get_running_loop()
     conveyor_belt = asyncio.Queue()
     cookie_filename = f"/tmp/cookies_{uuid.uuid4().hex[:8]}.txt"
@@ -225,7 +245,7 @@ async def run_fly_process(log_queue: asyncio.Queue, url: str, cookies: str, chun
             log_dispatch(log_queue, ctx, "status", text="--- ✅ DONE ---")
         else:
             shipper_task = asyncio.create_task(run_shipper(conveyor_belt, log_queue, ctx))
-            await loop.run_in_executor(pool, run_packager, loop, conveyor_belt, log_queue, ctx, url, chunk_size, limit_rate, player_clients, wait_time, po_token, impersonate, no_playlist)
+            await loop.run_in_executor(pool, run_packager, loop, conveyor_belt, log_queue, ctx, url, chunk_size, limit_rate, player_clients, wait_time, po_token, impersonate, no_playlist, total_duration, split_duration)
             await shipper_task
             log_dispatch(log_queue, ctx, "status", text="--- ✅ ALL SHIPMENTS COMPLETE ---")
     

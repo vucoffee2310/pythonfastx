@@ -116,7 +116,7 @@ def compare_tools():
         runtime_path = shutil.which(tool)
         status = "Unknown"
         if build_path and runtime_path: status = "✅ Same Path" if build_path == runtime_path else "⚠️ Path Changed"
-        elif build_path and not runtime_path: status = "❌ Missing in Runtime"
+        elif build_path and not runtime_path: status = "❌ Missing in Runtimes"
         elif not build_path and runtime_path: status = "✨ New in Runtime"
         else: status = "⛔ Not Available"
         comparison.append({ "name": tool, "build": build_path or "-", "runtime": runtime_path or "-", "status": status })
@@ -168,3 +168,4 @@ def log_dispatch(q: asyncio.Queue, ctx: SessionContext, event_type: str, payload
     # Debug Mode: Verbose
     if text: q.put_nowait(f"[{event_type.upper()}] {text}\n")
     if event_type in ["asset", "error", "keepalive"] or payload: q.put_nowait(json.dumps(packet) + "\n")
+

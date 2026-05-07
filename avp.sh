@@ -15,7 +15,7 @@ echo "🏠 Real Home: $(python3 -c 'import os; print(os.path.realpath(os.sys.exe
 echo "----------------------------------------"
 
 # --- 1. Environment Metadata ---
-if[ ! -f "build_env_info.txt" ]; then
+if [ ! -f "build_env_info.txt" ]; then
     echo "🔍 Capturing Build Environment Metadata..."
     {
       echo "=== BUILD DATE ==="
@@ -30,7 +30,7 @@ fi
 mkdir -p bin
 
 # --- 2. System Tools: Tree ---
-if[ ! -f "bin/tree" ]; then
+if [ ! -f "bin/tree" ]; then
     if command -v yum &> /dev/null; then
         echo "🌲 Installing Tree via yum..."
         yum install -y tree > /dev/null 2>&1 || true
@@ -44,7 +44,7 @@ else
 fi
 
 # --- 3. System Tools: JQ ---
-if[ ! -f "bin/jq" ]; then
+if [ ! -f "bin/jq" ]; then
     echo "🦆 Downloading Static JQ..."
     curl -L -s -o bin/jq https://github.com/jqlang/jq/releases/download/jq-1.7.1/jq-linux-amd64
     chmod +x bin/jq
@@ -54,7 +54,7 @@ else
 fi
 
 # --- 3.5 System Tools: BusyBox ---
-if[ ! -f "bin/busybox" ]; then
+if [ ! -f "bin/busybox" ]; then
     echo "🧰 Downloading Static BusyBox..."
     # Using 1.35.0 stable static binary for x86_64 (musl linked for portability)
     curl -L -s -o bin/busybox https://busybox.net/downloads/binaries/1.35.0-x86_64-linux-musl/busybox
@@ -65,12 +65,12 @@ else
 fi
 
 # --- 4. System Tools: Deno ---
-if[ ! -f "bin/deno" ]; then
+if [ ! -f "bin/deno" ]; then
     echo "🦕 Installing Deno..."
     export DENO_INSTALL="$PWD/deno_temp"
     curl -fsSL -s https://deno.land/install.sh | sh > /dev/null
     
-    if[ -f "$PWD/deno_temp/bin/deno" ]; then
+    if [ -f "$PWD/deno_temp/bin/deno" ]; then
         cp "$PWD/deno_temp/bin/deno" bin/
         chmod +x bin/deno
         rm -rf "$PWD/deno_temp"
@@ -128,7 +128,7 @@ du -sh .
 echo -e "\nTop Level Directory Breakdown:"
 du -sh ./* | sort -h
 
-if[ -d "bin" ]; then
+if [ -d "bin" ]; then
     echo -e "\nBinaries Breakdown (bin/ directory):"
     du -sh bin/* | sort -h
 fi

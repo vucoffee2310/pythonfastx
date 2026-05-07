@@ -65,22 +65,22 @@ else
 fi
 
 # --- 4. System Tools: Deno ---
-# ⚠️ WARNING: Deno is ~130MB unzipped and is likely breaking the 250MB limit. 
-# Commented out for debugging. Uncomment ONLY if your Python logic relies on it.
-# if [ ! -f "bin/deno" ]; then
-#     echo "🦕 Installing Deno..."
-#     export DENO_INSTALL="$PWD/deno_temp"
-#     curl -fsSL -s https://deno.land/install.sh | sh > /dev/null
-#     
-#     if [ -f "$PWD/deno_temp/bin/deno" ]; then
-#         cp "$PWD/deno_temp/bin/deno" bin/
-#         chmod +x bin/deno
-#         rm -rf "$PWD/deno_temp"
-#         echo "✅ Deno installed to bin/"
-#     fi
-# else
-#     echo "✨ bin/deno already exists. Skipping."
-# fi
+⚠️ WARNING: Deno is ~130MB unzipped and is likely breaking the 250MB limit. 
+Commented out for debugging. Uncomment ONLY if your Python logic relies on it.
+if [ ! -f "bin/deno" ]; then
+    echo "🦕 Installing Deno..."
+    export DENO_INSTALL="$PWD/deno_temp"
+    curl -fsSL -s https://deno.land/install.sh | sh > /dev/null
+    
+    if [ -f "$PWD/deno_temp/bin/deno" ]; then
+        cp "$PWD/deno_temp/bin/deno" bin/
+        chmod +x bin/deno
+        rm -rf "$PWD/deno_temp"
+        echo "✅ Deno installed to bin/"
+    fi
+else
+    echo "✨ bin/deno already exists. Skipping."
+fi
 
 # --- 5. Python Dependencies: Core ---
 echo "📦 Forcing installation of core Python requirements with no cache..."

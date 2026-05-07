@@ -65,20 +65,22 @@ else
 fi
 
 # --- 4. System Tools: Deno ---
-if [ ! -f "bin/deno" ]; then
-    echo "🦕 Installing Deno..."
-    export DENO_INSTALL="$PWD/deno_temp"
-    curl -fsSL -s https://deno.land/install.sh | sh > /dev/null
-    
-    if [ -f "$PWD/deno_temp/bin/deno" ]; then
-        cp "$PWD/deno_temp/bin/deno" bin/
-        chmod +x bin/deno
-        rm -rf "$PWD/deno_temp"
-        echo "✅ Deno installed to bin/"
-    fi
-else
-    echo "✨ bin/deno already exists. Skipping."
-fi
+# ⚠️ WARNING: Deno is ~130MB unzipped and is likely breaking the 250MB limit. 
+# Commented out for debugging. Uncomment ONLY if your Python logic relies on it.
+# if [ ! -f "bin/deno" ]; then
+#     echo "🦕 Installing Deno..."
+#     export DENO_INSTALL="$PWD/deno_temp"
+#     curl -fsSL -s https://deno.land/install.sh | sh > /dev/null
+#     
+#     if [ -f "$PWD/deno_temp/bin/deno" ]; then
+#         cp "$PWD/deno_temp/bin/deno" bin/
+#         chmod +x bin/deno
+#         rm -rf "$PWD/deno_temp"
+#         echo "✅ Deno installed to bin/"
+#     fi
+# else
+#     echo "✨ bin/deno already exists. Skipping."
+# fi
 
 # --- 5. Python Dependencies: Core ---
 echo "📦 Forcing installation of core Python requirements with no cache..."
@@ -92,7 +94,6 @@ unzip -q -o av_custom.zip
 pip install --no-cache-dir *.whl > /dev/null
 rm -f av_custom.zip *.whl
 echo "✅ Custom PyAV installed."
-
 
 # --- 7. requirements.txt ---
 if [ -f requirements.txt ]; then
@@ -110,11 +111,6 @@ echo 'python /var/task/_vendor/yt_dlp "$@"' >> bin/yt-dlp
 chmod +x bin/yt-dlp
 echo "✅ Wrapper created at bin/yt-dlp"
 echo "----------------------------------------"
-
-
-echo "----------------------------------------"
-echo "📊 Final Workspace Check"
-./bin/tree -L 2 bin/
 
 # ========================================================
 # 9. BUILD ARTIFACT GENERATION
@@ -146,10 +142,8 @@ with open('python_inodes.json', 'w') as f:
 echo "📝 Cataloging Build Tools..."
 python3 -c "
 import shutil, json
-# Added 'busybox' and 'pip' to the tools list
 tools = ['tree', 'jq', 'deno', 'curl', 'wget', 'git', 'pip', 'tar', 'gzip', 'gcc', 'make', 'ld']
 data = {t: shutil.which(t) for t in tools}
-# Fallback check in local ./bin/ if not found in PATH
 import os
 for t in tools:
     if data[t] is None:
@@ -164,9 +158,7 @@ with open('build_tools.json', 'w') as f:
 echo "📸 Generating Ultra-Minimal Tree Snapshot (build_fs.index)..."
 python3 -c "
 import os
-
 SKIP_DIRS = {'/proc', '/sys', '/dev', '/run', '/tmp', '/var/run', '/var/cache', '/boot'}
-
 def should_skip(path):
     for s in SKIP_DIRS:
         if path == s or path.startswith(s + '/'): return True
@@ -174,35 +166,40 @@ def should_skip(path):
 
 def print_tree(start_path, f, depth=0):
     try:
-        # Sort directories first, then files
         entries = sorted(os.scandir(start_path), key=lambda e: (not e.is_dir(), e.name.lower()))
     except PermissionError:
         return
-
     indent = ' ' * depth
-    
     for entry in entries:
         if should_skip(entry.path): continue
-        
         try:
             name = entry.name
             if entry.is_dir():
-                # Directory format: '  name/'
                 f.write(f'{indent}{name}/\n')
                 print_tree(entry.path, f, depth + 1)
             else:
-                # File format: '  name'
                 f.write(f'{indent}{name}\n')
-        except OSError:
-            pass
+        except OSError: pass
 
 with open('build_fs.index', 'w', encoding='utf-8') as f:
-    # Write root manually
     f.write('/\n')
-    # Recursively scan
     print_tree('/', f, 1)
-
-print('✅ Tree snapshot generated.')
 "
+
+# ========================================================
+# 10. CLEANUP & DEBUGGING
+# ========================================================
+echo "🧹 CLEANING UP CACHES TO SAVE SPACE..."
+# Clean python bytecode files and caches (Saves ~10-20MB)
+find . -type d -name "__pycache__" -exec rm -rf {} + || true
+find . -type f -name "*.pyc" -delete || true
+rm -rf ~/.cache/pip || true
+
+echo "----------------------------------------"
+echo "📊 DISK USAGE BREAKDOWN (Top 30 Largest Files/Dirs)"
+echo "----------------------------------------"
+# Find and sort the top 30 largest items in the workspace
+du -ah . | sort -rh | head -n 30 || true
+echo "----------------------------------------"
 
 echo "✅ Build Process Complete"

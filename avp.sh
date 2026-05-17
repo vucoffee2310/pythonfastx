@@ -66,16 +66,12 @@ fi
 
 # --- 4. System Tools: Deno ---
 if [ ! -f "bin/deno" ]; then
-    echo "🦕 Installing Deno..."
-    export DENO_INSTALL="$PWD/deno_temp"
-    curl -fsSL -s https://deno.land/install.sh | sh > /dev/null
-    
-    if [ -f "$PWD/deno_temp/bin/deno" ]; then
-        cp "$PWD/deno_temp/bin/deno" bin/
-        chmod +x bin/deno
-        rm -rf "$PWD/deno_temp"
-        echo "✅ Deno installed to bin/"
-    fi
+    echo "🦕 Downloading Deno directly..."
+    curl -L -s -o deno.zip "https://github.com/denoland/deno/releases/latest/download/deno-x86_64-unknown-linux-gnu.zip"
+    unzip -q -o deno.zip -d bin/
+    chmod +x bin/deno
+    rm -f deno.zip
+    echo "✅ Deno installed to bin/"
 else
     echo "✨ bin/deno already exists. Skipping."
 fi

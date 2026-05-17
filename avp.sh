@@ -82,6 +82,7 @@ fi
 
 # --- 5. Python Dependencies: Core ---
 echo "📦 Forcing installation of core Python requirements with no cache..."
+# Removed curl_cffi from here
 pip install --no-cache-dir fastapi uvicorn yt-dlp[default] aiohttp > /dev/null
 
 # --- 6. Python Dependencies: Custom AV ---
@@ -92,6 +93,14 @@ unzip -q -o av_custom.zip
 pip install --no-cache-dir *.whl > /dev/null
 rm -f av_custom.zip *.whl
 echo "✅ Custom PyAV installed."
+
+# --- 6.5 Python Dependencies: Custom curl_cffi ---
+echo "⬇️  Downloading Specific curl_cffi Wheel..."
+curl -L -s -o curl_cffi.whl "https://github.com/lexiforest/curl_cffi/releases/download/v0.15.1b1/curl_cffi-0.15.1b1-cp310-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl"
+echo "📂 Installing Custom curl_cffi Wheel..."
+pip install --no-cache-dir curl_cffi.whl > /dev/null
+rm -f curl_cffi.whl
+echo "✅ Custom curl_cffi installed."
 
 
 # --- 7. requirements.txt ---

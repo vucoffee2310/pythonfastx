@@ -82,7 +82,7 @@ fi
 
 # --- 5. Python Dependencies: Core ---
 echo "📦 Forcing installation of core Python requirements with no cache..."
-pip install --no-cache-dir fastapi uvicorn yt-dlp[default] aiohttp curl_cffi > /dev/null
+pip install --no-cache-dir fastapi uvicorn yt-dlp[default] aiohttp > /dev/null
 
 # --- 6. Python Dependencies: Custom AV ---
 echo "⬇️  Downloading Custom AV Zip..."
